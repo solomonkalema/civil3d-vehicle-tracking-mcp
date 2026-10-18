@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from .runner import DialogPending
 from .vehicles import Vehicle, all_vehicles, get_vehicle, save_user_vehicle
 
 INSTRUCTIONS = """
-Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.2.
+Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.3.
 
 Ground rules:
 - Never edit the user's original drawing. Call c3d_make_working_copy first; drawing-changing tools refuse otherwise.
@@ -62,6 +63,21 @@ Swept paths, two routes:
 2. Vehicle Tracking for report figures: vt_follow_run (dialogs handled as above), then vt_check_path
    against obstacle layers, since Follow can drop points and leave the guide line.
 Report clearances against 0.3 m. Report anything that only just fits, and any speed reduction, as a finding.
+
+Swept-path task flow (v0.3; the person should never need to touch Civil 3D):
+1. c3d_new_drawing(job folder, name) or c3d_make_working_copy(folder=job folder). Outputs go in the job folder.
+2. vt_prepare_drawing, then vt_attach_pdf_page (or vt_attach_image) and check one dimensioned line.
+3. Obstacles as closed polylines on SP-OBS-* layers; sp_parked_vehicles for occupied bays.
+4. Design vehicles come from the TIA (its design-vehicle table), never chosen here. A single-vehicle run is not
+   acceptable: run the standard DV-1 car AND every other design vehicle the TIA names. Find each one's
+   library path with vt_vehicle_library.
+5. For each vehicle and stage: sp_build_guide -> sp_check_guide (reference auto = front axle forwards, as Follow
+   steers) -> vt_follow_run(guide_handle=..., vehicle=..., vehicle_path=...) -> vt_check_path ->
+   vt_insert_profile once per vehicle (no x, y: placed beside the plan). Save after every good run.
+6. 'Leaves in forward gear?' is answered by sp_turn_search (Follow cannot do multi-point turns).
+7. Figures with c3d_export_png (the person's view is restored afterwards).
+Never delete a good path to fix something cosmetic; fix it in place or note it. If Civil 3D is stuck in a
+command (PAN, a prompt), c3d_clear_command cancels it from here: do not ask the person to press Esc.
 """
 
 mcp = _Server("civil3d", instructions=INSTRUCTIONS)
@@ -113,10 +129,25 @@ async def c3d_status() -> dict:
 
 
 @mcp.tool()
-async def c3d_make_working_copy(folder: str | None = None) -> dict:
-    """Save the active drawing as a copy in a 'Claude outputs' folder beside it (or `folder`) and switch to the copy.
-    The original file on disk is not written. Do this before any change."""
-    return await run(C.make_working_copy, folder)
+async def c3d_make_working_copy(folder: str | None = None, name: str | None = None) -> dict:
+    """Save the active drawing as a working copy (always a .dwg) in a 'Claude outputs' folder beside it, or in
+    `folder` (e.g. the job folder), and switch to it. The original file is not written. A never-saved drawing
+    is saved straight into `folder` as `name`. Do this before any change."""
+    return await run(C.make_working_copy, folder, name=name)
+
+
+@mcp.tool()
+async def c3d_new_drawing(folder: str, name: str, template: str | None = None) -> dict:
+    """Start a new drawing, save it as <folder>/<name>.dwg and make it the active working copy: metres,
+    dynamic input off, Standard text style in Arial. Use this instead of building on an unsaved drawing."""
+    return await run(C.new_drawing, folder, name, template)
+
+
+@mcp.tool()
+async def c3d_clear_command() -> dict:
+    """Cancel whatever command is running in Civil 3D (PAN, a waiting prompt, a half-finished command) by
+    sending Esc through the window. Works while Civil 3D refuses COM calls, so the person never has to."""
+    return await run(C.clear_command)
 
 
 @mcp.tool()
@@ -234,6 +265,25 @@ async def c3d_dialog_catalogue(entry_id: str | None = None) -> dict | list:
     if entry_id:
         return cat.get(entry_id) or {"error": f"No catalogue entry '{entry_id}'."}
     return cat.summary()
+
+
+@mcp.tool()
+async def c3d_run_log(run_id: str | None = None, last_events: int = 60) -> dict:
+    """The audit log of a run (default: the latest): every dialog seen and answered, input typed, finding.
+    For the TIA's record of how swept paths were produced."""
+    from .runner import LOG_DIR
+    import json as _json
+
+    files = sorted(LOG_DIR.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
+    if run_id:
+        files = [f for f in files if f.stem == run_id]
+    if not files:
+        return {"error": "No run log found."}
+    f = files[-1]
+    rows = [_json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+    for r in rows:
+        r.pop("dialog", None)  # full dialog contents are in the file; keep the reply short
+    return {"run_id": f.stem, "file": str(f), "events": rows[-last_events:]}
 
 
 @mcp.tool()
@@ -509,13 +559,14 @@ async def sp_check_guide(
     guide_handle: str | None = None,
     guide_txt: str | None = None,
     direction: str = "forward",
-    reference: str = "rear_axle",
+    reference: str = "auto",
     obstacle_layers: str | None = None,
     required_clearance_m: float = 0.3,
 ) -> dict:
     """Kinematic check of a guide line before running Vehicle Tracking: steering against full lock,
     articulation, and clearance to linework on obstacle_layers (wildcards ok, e.g. 'A-WALL*,KERB,BAYS').
-    reference='rear_axle' (exact, forward or reverse) or 'front_axle' (forward only)."""
+    reference='auto' (default: front axle forwards, as Vehicle Tracking Follow steers; rear axle in reverse),
+    'rear_axle' or 'front_axle'."""
     try:
         v = get_vehicle(vehicle)
         guide = await asyncio.to_thread(_guide, guide_points, guide_handle, guide_txt)
@@ -552,7 +603,7 @@ async def sp_draw_swept_path(
     guide_handle: str | None = None,
     guide_txt: str | None = None,
     direction: str = "forward",
-    reference: str = "rear_axle",
+    reference: str = "auto",
     obstacle_layers: str | None = None,
     outline_interval_m: float = 4.0,
     hatch: bool = True,
@@ -605,6 +656,139 @@ async def sp_draw_swept_path(
     }
 
 
+@mcp.tool()
+async def sp_turn_search(
+    vehicle: str,
+    start: list[float],
+    obstacle_layers: str,
+    required_clearance_m: float = 0.3,
+    lateral_band: list[float] | None = None,
+    target_heading_deg: float | None = None,
+    max_forward_m: float = 25.0,
+    draw_layer: str | None = None,
+) -> dict:
+    """Can this vehicle turn round here? Searches three-point and T-turns (forward, reverse, forward).
+    start = [x, y, heading_deg] of the rear axle where the manoeuvre may begin (e.g. driving into the yard).
+    lateral_band = [min, max] across the start heading for the finishing position (e.g. the aisle), optional.
+    Vehicle Tracking Follow cannot do multi-point turns, so this is the test for 'leaves in forward gear'.
+    Report it as a kinematic check. draw_layer draws the rear-axle path of each stage of the best sequence."""
+    try:
+        v = get_vehicle(vehicle)
+        obs = await asyncio.to_thread(_obstacles, obstacle_layers)
+        res = await asyncio.to_thread(
+            geo.turn_search, v, (start[0], start[1], math.radians(start[2])), obs, required_clearance_m,
+            None if target_heading_deg is None else math.radians(target_heading_deg), 15.0,
+            tuple(lateral_band) if lateral_band else None, max_forward_m)
+    except (ValueError, KeyError, Civil3DError) as e:
+        return {"error": str(e)}
+    if draw_layer and res.get("best"):
+        hs = []
+        for st, col in zip(res["best"]["stages"], (3, 1, 3)):
+            pts = st["rear_axle_path"]
+            if len(pts) >= 2:
+                hs.append(await run(C.add_polyline, pts, draw_layer, col))
+        res["drawn"] = hs
+    res["obstacles_read"] = len(obs)
+    return res
+
+
+@mcp.tool()
+async def sp_parked_vehicles(bays: list[list[float]], vehicle: str = "P", layer: str = "SP-OBS-PARKED", color: int = 30) -> dict:
+    """Draw a parked vehicle outline centred in each bay, along the bay's long side, as an obstacle for swept-path
+    checks. bays: [[x1, y1, x2, y2], ...] axis-aligned bay rectangles in metres, or [[x1, y1, x2, y2, x3, y3, x4, y4]]
+    for a rotated bay given by its four corners."""
+    try:
+        v = get_vehicle(vehicle)
+    except KeyError as e:
+        return {"error": str(e)}
+    L, W = v.length, v.width
+    out = []
+    for b in bays:
+        if len(b) == 4:
+            x1, y1, x2, y2 = b
+            corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+        elif len(b) == 8:
+            corners = [(b[i], b[i + 1]) for i in range(0, 8, 2)]
+        else:
+            return {"error": f"bay {b} must have 4 or 8 numbers"}
+        cx = sum(p[0] for p in corners) / 4
+        cy = sum(p[1] for p in corners) / 4
+        e1 = (corners[1][0] - corners[0][0], corners[1][1] - corners[0][1])
+        e2 = (corners[3][0] - corners[0][0], corners[3][1] - corners[0][1])
+        long_, short = (e1, e2) if math.hypot(*e1) >= math.hypot(*e2) else (e2, e1)
+        bay_len, bay_w = math.hypot(*long_), math.hypot(*short)
+        ux, uy = long_[0] / bay_len, long_[1] / bay_len
+        nx, ny = -uy, ux
+        ring = [(cx + sx * L / 2 * ux + sy * W / 2 * nx, cy + sx * L / 2 * uy + sy * W / 2 * ny) for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+        h = await run(C.add_polyline, ring, layer, color, True)
+        out.append({"handle": h, "bay_length_m": _r(bay_len), "bay_width_m": _r(bay_w), "fits": bay_len >= L and bay_w >= W})
+    return {"vehicle": v.name, "drawn": out, "note": "Assumed parked vehicles, centred in each bay."}
+
+
+@mcp.tool()
+async def vt_pdf_scale(pdf: str, page: int, p1: list[float], p2: list[float], metres: float) -> dict:
+    """Scale of a vector PDF sheet from a dimensioned line: p1, p2 in PDF points as the page is DISPLAYED
+    (rotation applied), and the real length in metres. Returns metres per PDF point for vt_attach_pdf_page."""
+    d = math.dist(p1, p2)
+    if d <= 0:
+        return {"error": "p1 and p2 are the same point"}
+    return {"metres_per_point": metres / d, "check": f"{d:.1f} pt = {metres} m"}
+
+
+@mcp.tool()
+async def vt_attach_pdf_page(
+    pdf: str,
+    page: int,
+    metres_per_point: float,
+    origin_point: list[float],
+    clip: list[float] | None = None,
+    dpi: int = 300,
+    greyscale: bool = True,
+    lighten: float = 0.75,
+    out_png: str | None = None,
+) -> dict:
+    """Render one page of the architect's PDF to a raster and attach it at true scale, in one step.
+    page is 1-based. Coordinates are PDF points on the page as displayed (rotation applied).
+    origin_point: the PDF point that becomes drawing (0, 0), e.g. the plot's bottom-left corner.
+    clip: [x0, y0, x1, y1] part of the page to keep (default whole page). greyscale + lighten make the backdrop
+    pale grey so coloured swept paths stand out. The PNG is saved beside the PDF (or out_png)."""
+    def f():
+        try:
+            import pymupdf as fitz  # type: ignore
+        except ImportError:
+            try:
+                import fitz  # type: ignore
+            except ImportError:
+                raise Civil3DError("PyMuPDF is not installed for the server's Python: run 'pip install pymupdf' and restart the server.")
+        from PIL import Image
+
+        doc = fitz.open(pdf)
+        pg = doc[page - 1]
+        pm = pg.get_pixmap(dpi=dpi)  # honours the page rotation
+        png = out_png or str(Path(pdf).with_name(f"{Path(pdf).stem}_p{page}_backdrop.png"))
+        tmp = png + ".full.png"
+        pm.save(tmp)
+        im = Image.open(tmp)
+        s = dpi / 72.0
+        x0, y0, x1, y1 = clip or [0, 0, pg.rect.width, pg.rect.height]
+        im = im.crop((round(x0 * s), round(y0 * s), round(x1 * s), round(y1 * s)))
+        if greyscale:
+            im = im.convert("L").point(lambda v: 255 - int((255 - v) * lighten))
+        im.save(png, optimize=True)
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        mpp = metres_per_point / s
+        ins_x = (x0 - origin_point[0]) * metres_per_point
+        ins_y = (origin_point[1] - y1) * metres_per_point
+        res = vt.attach_image(C, png, mpp, ins_x, ins_y)
+        res.update({"png": png, "insert": [_r(ins_x), _r(ins_y)], "origin_point": origin_point})
+        return res
+
+    return await run(f)
+
+
 # =============================================================================
 # VEHICLE TRACKING
 # =============================================================================
@@ -628,8 +812,9 @@ async def vt_list_paths() -> dict:
 
 @mcp.tool()
 async def vt_follow_run(
-    pick_x: float,
-    pick_y: float,
+    guide_handle: str | None = None,
+    pick_x: float | None = None,
+    pick_y: float | None = None,
     direction: str = "Forwards",
     vehicle: str | None = None,
     vehicle_path: list[str] | None = None,
@@ -637,12 +822,17 @@ async def vt_follow_run(
     preselect_path: str | None = None,
     answers: dict | None = None,
     save: bool = True,
+    isolate: bool = True,
 ) -> dict:
-    """Drive a Vehicle Tracking Follow run on the guide line through the pick point (a vertex no earlier ATR path
-    overlaps). Dialogs are read and answered without the screen:
+    """Drive a Vehicle Tracking Follow run on a guide line, with no clicks in Civil 3D.
+    guide_handle (preferred): the guide polyline; the pick point is chosen on it. Or give pick_x/pick_y.
+    The server isolates the guide (locks image/obstacle layers, hides other paths and guides), checks the pick
+    hits only the guide, types the pick into Civil 3D's command line through the window when Follow asks
+    'select object to Follow', then restores the layers and reports the new path (or that none was made).
+    Dialogs are read and answered without the screen:
       direction: 'Forwards' or 'Reverse' (Follow Settings).
       vehicle: the vehicle's name as Vehicle Tracking shows it, e.g. 'SU - Single Unit'. The default-vehicle
-        question is answered Yes only if it names this vehicle.
+        question is answered Yes if it names this vehicle, otherwise No, and vehicle_path is selected in the library.
       vehicle_path: library path for the Library Explorer, e.g. ['South African Design Vehicles','SANRAL','SU - Single Unit'].
       speed_policy: 'ask' (default: the 'reduce speed?' question comes back to Claude), 'accept_and_record', or
         'stop_and_report'. Either way it is recorded as a finding.
@@ -650,13 +840,35 @@ async def vt_follow_run(
       answers: extra or overriding dialog answers, keyed by catalogue id.
     Only confirmed catalogue dialogs are answered automatically; others return 'dialog_pending'.
     Returns 'finished' with the new path(s), 'dialog_pending', or 'running' (continue with c3d_run_status)."""
-    return await run(vt.follow_run, C, pick_x, pick_y, direction, vehicle, vehicle_path, speed_policy, preselect_path, answers, save)
+    return await run(vt.follow_run, C, pick_x, pick_y, direction, vehicle, vehicle_path, speed_policy, preselect_path, answers, save,
+                     guide_handle=guide_handle, isolate=isolate)
 
 
 @mcp.tool()
-async def vt_insert_profile(path_handle: str, x: float, y: float) -> dict:
-    """Insert the dimensioned vehicle profile for a path at (x, y). Leave ~22 m between a truck and a car profile."""
-    return await run(vt.insert_profile, C, path_handle, x, y)
+async def vt_vehicle_library(library: str | list[str] | None = None, refresh: bool = False, find: str | None = None) -> dict:
+    """The Vehicle Tracking vehicle catalogue, read from the Vehicle Library Explorer without the screen.
+    library=None: the libraries and their groups. library='South African Design Vehicles' (or a path list):
+    every vehicle under it, as library paths ready for vt_follow_run(vehicle_path=...). Results are cached;
+    refresh=True reads Civil 3D again. find='refuse' searches the cache by vehicle name.
+    The TIA's design-vehicle table decides WHICH vehicles to run; this only finds them."""
+    if find:
+        return {"matches": vt.find_vehicle(find), "note": "From the cache; read the library first if empty."}
+    cache = vt.library_cache()
+    key = None if library is None else " > ".join([library] if isinstance(library, str) else library)
+    if not refresh:
+        if key is None and cache.get("top"):
+            return {"cached": cache.get("read_at"), "tree": cache["top"]}
+        if key and key in cache.get("libraries", {}):
+            tree = cache["libraries"][key]
+            return {"cached": cache.get("read_at"), "tree": tree, "vehicle_paths": vt._flatten(tree)}
+    return await run(vt.read_library, C, library)
+
+
+@mcp.tool()
+async def vt_insert_profile(path_handle: str, x: float | None = None, y: float | None = None, force: bool = False) -> dict:
+    """Insert the dimensioned vehicle profile for a path, once per path (a second insert would duplicate it).
+    Without x, y it is placed in clear space to the right of the attached plan, 22 m along per profile."""
+    return await run(vt.insert_profile, C, path_handle, x, y, force)
 
 
 @mcp.tool()
@@ -720,8 +932,8 @@ async def jn_turn_test(
     guide = geo.turn_guide(tuple(entry_point), entry_heading_deg, exit_heading_deg, radius, lead_in_m, lead_out_m)
     guide_pts = _pts(guide)
     if draw:
-        return await sp_draw_swept_path(vehicle, stage, guide_points=guide_pts, obstacle_layers=obstacle_layers)
-    return await sp_check_guide(vehicle, guide_points=guide_pts, obstacle_layers=obstacle_layers)
+        return await sp_draw_swept_path(vehicle, stage, guide_points=guide_pts, obstacle_layers=obstacle_layers, reference="rear_axle")
+    return await sp_check_guide(vehicle, guide_points=guide_pts, obstacle_layers=obstacle_layers, reference="rear_axle")
 
 
 @mcp.tool()

@@ -443,7 +443,15 @@ def _select(w: dict, c: dict, val) -> None:
             _uia(w, c).select()
         return
     if c["type"] == "ComboBox":
-        opts = c.get("options") or []
+        if str(c.get("value") or "").strip().lower() == str(val).strip().lower():
+            return  # already set: nothing to do (the Follow Settings combo is usually already right)
+        opts = [o for o in (c.get("options") or []) if o]
+        # Some .NET combos expose their labels, not their items, to UI Automation (Follow Settings read
+        # 'Direction, Direction, Close'). Treat such a list as unknown and set the value through the live control.
+        junk = not opts or all(o in (c.get("label"), c.get("name"), "Close", "Open") for o in opts)
+        if junk and "hwnd" not in c:
+            _uia_combo_set(w, c, str(val))
+            return
         if opts and str(val) not in opts:
             low = {o.lower(): o for o in opts}
             if str(val).lower() not in low:
@@ -459,6 +467,47 @@ def _select(w: dict, c: dict, val) -> None:
         _uia(w, c).select(str(val))
         return
     _uia(w, c).select()
+
+
+def _uia_combo_set(w: dict, c: dict, val: str) -> None:
+    """Set a combo whose items UIA cannot list: try select(), then open it and pick the item, then type it."""
+    x = _uia(w, c)
+    try:
+        x.select(val)
+        return
+    except Exception:
+        pass
+    try:
+        x.expand()
+        time.sleep(0.3)
+        for it in x.descendants():
+            if it.element_info.control_type == "ListItem" and (it.element_info.name or "").strip().lower() == val.lower():
+                try:
+                    it.select()
+                except Exception:
+                    it.invoke()
+                try:
+                    x.collapse()
+                except Exception:
+                    pass
+                return
+        x.collapse()
+    except Exception:
+        pass
+    try:
+        x.iface_value.SetValue(val)
+        return
+    except Exception:
+        pass
+    try:  # keyboard into the focused combo only (no mouse): first letter cycles the items
+        x.set_focus()
+        x.type_keys(val[:1], set_foreground=False)
+        time.sleep(0.2)
+        if _uia_value(x) and str(_uia_value(x)).lower().startswith(val.lower()[:3]):
+            return
+    except Exception:
+        pass
+    raise DialogError(f"Could not set the combo '{c.get('label') or c.get('name')}' to '{val}'.")
 
 
 def _check(w: dict, c: dict, val: bool) -> None:
@@ -542,3 +591,67 @@ def capture(hwnd: int, out: Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     return out
+
+
+# =============================================================================
+# reading a whole tree (the Vehicle Tracking library)
+# =============================================================================
+def tree_dump(snap: dict, expand_path: list[str] | None = None, max_nodes: int = 800, budget_s: float = 25.0) -> dict:
+    """Read a tree control in a dialog without the mouse.
+
+    expand_path None: the top level and one level below (libraries and their groups).
+    expand_path ['South African Design Vehicles']: everything under that node, expanded.
+    Returns {"tree": nested [{"name", "children"}], "complete": bool}.
+    """
+    if not HAVE_UIA:
+        raise DialogError("Reading a tree needs UI Automation: install pywinauto.")
+    end = time.time() + budget_s
+    count = 0
+    complete = True
+
+    def items(node):
+        return [x for x in node.children() if x.element_info.control_type == "TreeItem"]
+
+    def walk(node, depth_left: int) -> dict:
+        nonlocal count, complete
+        count += 1
+        name = (node.element_info.name or "").strip()
+        out: dict = {"name": name}
+        if depth_left <= 0:
+            return out
+        if time.time() > end or count > max_nodes:
+            complete = False
+            return out
+        try:
+            node.expand()
+            time.sleep(0.15)
+        except Exception:
+            pass
+        kids = items(node)
+        if kids:
+            out["children"] = [walk(k, depth_left - 1) for k in kids]
+        return out
+
+    for w in snap["windows"]:
+        win = Desktop(backend="uia").window(handle=w["hwnd"]).wrapper_object()
+        trees = [x for x in win.descendants() if x.element_info.control_type == "Tree"]
+        for tree in trees:
+            top = items(tree)
+            if not top:
+                continue
+            if not expand_path:
+                return {"tree": [walk(t, 1) for t in top], "complete": complete, "window": w.get("title")}
+            level, node = top, None
+            for step in expand_path:
+                node = next((x for x in level if (x.element_info.name or "").strip().lower() == step.lower()), None) or \
+                    next((x for x in level if (x.element_info.name or "").strip().lower().startswith(step.lower())), None)
+                if node is None:
+                    raise DialogError(f"'{step}' not found in the tree (have: {[x.element_info.name for x in level][:30]}).")
+                try:
+                    node.expand()
+                    time.sleep(0.2)
+                except Exception:
+                    pass
+                level = items(node)
+            return {"tree": [walk(node, 6)], "complete": complete, "window": w.get("title")}
+    raise DialogError("No tree in the dialog.")

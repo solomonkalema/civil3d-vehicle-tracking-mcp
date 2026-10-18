@@ -88,11 +88,11 @@ class Vehicle:
 BUILTIN: dict[str, Vehicle] = {
     "P": Vehicle(
         name="P",
-        description="Passenger car, 4.8 x 1.8 m",
+        description="Passenger car, 4.8 x 1.8 m (SANRAL P as profiled by Vehicle Tracking)",
         width=1.80,
-        front_overhang=0.90,
-        wheelbase=2.80,
-        rear_overhang=1.10,
+        front_overhang=0.70,  # VT profile, 18 Oct 2026: 0.7 m front overhang, 3.1 m wheelbase
+        wheelbase=3.10,
+        rear_overhang=1.00,
         wall_to_wall_radius=6.8,
     ),
     "SU": Vehicle(

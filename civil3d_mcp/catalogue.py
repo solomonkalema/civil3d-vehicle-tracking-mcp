@@ -259,6 +259,8 @@ def resolve_answer(m: dict, answers: dict | None) -> tuple[list[dict] | None, st
         spec = {"actions": spec}
     cond = spec.get("when_text_matches")
     if cond and not re.search(cond, m.get("_text", ""), re.I):
+        if spec.get("else_actions"):
+            return list(spec["else_actions"]), f"the task's condition '{cond}' does not hold, so its else-answer was used"
         return None, f"the task's condition '{cond}' does not hold for this dialog's text"
     return list(spec.get("actions", [])), "confirmed exact match with a task-supplied answer"
 

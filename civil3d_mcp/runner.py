@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import dialogs as dlg
+from . import winput
 from .catalogue import HOME, Catalogue, compact, resolve_answer
 
 try:
@@ -92,6 +93,9 @@ class Run:
         self.error: str | None = None
         self.future_done_at: float | None = None
         self.inputs: list[str] = []  # answers for command-line prompts, sent in order
+        self.last_event = time.time()  # last dialog answered / input sent: prompts are judged from here
+        self.prompt_patterns: list[str] | None = None
+        self.prompt_text: str | None = None
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.log_file = LOG_DIR / f"{self.id}.jsonl"
 
@@ -143,7 +147,8 @@ class Runner:
     def busy(self) -> bool:
         return self.active is not None and self.active.open
 
-    def start(self, command: str, *, label: str = "", answers: dict | None = None, on_finish: Callable[[], Any] | None = None, inputs: list[str] | None = None) -> Run:
+    def start(self, command: str, *, label: str = "", answers: dict | None = None, on_finish: Callable[[], Any] | None = None,
+              inputs: list[str] | None = None, prompt_patterns: list[str] | None = None) -> Run:
         """Called on the main COM thread."""
         if self.busy() and self.active.state == "running":
             self.wait(self.active, 1.0)  # a command sent without waiting may simply have ended
@@ -155,6 +160,7 @@ class Runner:
             )
         run = Run(command, label, answers, on_finish)
         run.inputs = list(inputs or [])
+        run.prompt_patterns = prompt_patterns
         app = self.c3d.app()
         run.main_hwnd = int(self.c3d._retry(lambda: app.HWND))
         if dlg.HAVE_WIN32:
@@ -184,8 +190,14 @@ class Runner:
                         if out is not None:
                             return out
                         continue
-            # 2. has SendCommand come back?
+            # 2. SendCommand still blocked and no dialog: the command may be waiting at a prompt.
+            #    COM is refused in that state, so read the prompt and answer it through the window.
             fut = run.future
+            if fut is not None and not fut.done() and dlg.HAVE_WIN32 and run.main_hwnd:
+                out = self._prompt_while_blocked(run)
+                if out is not None:
+                    return out
+            # 3. has SendCommand come back?
             if fut is not None and fut.done():
                 if fut.exception() is not None:
                     run.state, run.error = "failed", f"{type(fut.exception()).__name__}: {fut.exception()}"
@@ -224,8 +236,49 @@ class Runner:
             time.sleep(0.3)
         return {"status": "running", "run_id": run.id, "elapsed_s": round(time.time() - run.started), "next": "Still running with no dialog. Call c3d_run_status to keep watching."}
 
+    def _prompt_while_blocked(self, run: Run) -> dict | None:
+        """Handle a command-line prompt while COM is blocked (SendCommand has not returned)."""
+        try:
+            if not dlg.win32gui.IsWindowEnabled(run.main_hwnd):
+                return None  # a modal dialog is up; the dialog branch deals with it
+        except Exception:
+            return None
+        quiet = time.time() - run.last_event
+        if quiet < 1.0:
+            return None
+        lines = winput.command_line_text(run.main_hwnd, run.pid)
+        prompt = winput.looks_like_prompt(lines, run.prompt_patterns)
+        if run.inputs and (prompt or quiet > 3.0):
+            text = run.inputs.pop(0)
+            ok = winput.send_text(run.main_hwnd, text if text.endswith((" ", "\n")) else text + "\n")
+            run.log("input", text=text, by="server (window input)", prompt=prompt, accepted=ok)
+            run.last_event = time.time()
+            time.sleep(0.4)
+            return None
+        if prompt and not run.inputs and quiet > 2.0:
+            run.state = "prompt"
+            run.prompt_text = prompt
+            run.log("prompt", prompt=prompt, blocked=True)
+            return {
+                "status": "waiting_at_prompt",
+                "run_id": run.id,
+                "prompt": prompt,
+                "next": "The command is waiting for command-line input. Send it with c3d_run_input (typed through the window, "
+                        "so it works while Civil 3D refuses COM), or cancel with c3d_run_cancel.",
+            }
+        return None
+
     def _handle_dialog(self, run: Run, hwnds: list[int]) -> dict | None:
         snap = dlg.snapshot(hwnds)
+        # The floating command line shows up as a window while a modal is open: it is not a dialog.
+        cmdline = [w["hwnd"] for w in snap["windows"] if winput.is_command_line(w)]
+        if cmdline:
+            run.baseline.update(cmdline)
+            keep = [h for h in hwnds if h not in cmdline]
+            if not keep:
+                return None
+            snap = dlg.snapshot(keep)
+            hwnds = keep
         m = self.catalogue.match(snap)
         self.catalogue.observe(snap, m)
         e = m.get("entry")
@@ -249,8 +302,18 @@ class Runner:
                 run.answered.append({"dialog_id": did, "entry": e["id"], "by": "server (task answer)", "actions": done})
                 run.log("answered", dialog_id=did, by="server", entry=e["id"], actions=done, finding=finding)
                 if _wait_closed(hwnds[0]):
+                    run.last_event = time.time()
                     return None
-                reason = "the task's answer was applied but the dialog stayed open"
+                # one retry: a click is occasionally lost while the dialog is still drawing
+                try:
+                    dlg.perform(dlg.snapshot([h for h in hwnds if dlg.win32gui.IsWindow(h)] or hwnds), actions)
+                    run.log("retried", dialog_id=did, actions=actions)
+                except Exception:
+                    pass
+                if _wait_closed(hwnds[0]):
+                    run.last_event = time.time()
+                    return None
+                reason = "the task's answer was applied twice but the dialog stayed open"
                 snap = dlg.snapshot([h for h in hwnds if dlg.win32gui.IsWindow(h)] or hwnds)
                 run.log("still_open", dialog_id=did)
         run.state = "dialog"
@@ -309,19 +372,37 @@ class Runner:
         run.pending = None
         run.state = "running"
         if not _wait_closed(hwnds[0]):
-            run.log("still_open", dialog_id=dialog_id)
+            try:
+                dlg.perform(dlg.snapshot([h for h in hwnds if dlg.win32gui.IsWindow(h)] or hwnds), actions)
+                run.log("retried", dialog_id=dialog_id, actions=actions)
+            except Exception:
+                pass
+            if not _wait_closed(hwnds[0]):
+                run.log("still_open", dialog_id=dialog_id)
+        run.last_event = time.time()
         return self.wait(run, budget_s)
 
     def send_input(self, text: str, budget_s: float = 25.0) -> dict:
         run = self.active
-        if run is None or run.state != "prompt":
+        if run is None or run.state not in ("prompt", "running"):
             raise dlg.DialogError("No run is waiting at a command-line prompt.")
         if not text.strip():
             raise dlg.DialogError("Empty input refused: Enter on an empty prompt repeats the last command.")
-        run.log("input", text=text)
+        payload = text if text.endswith((" ", "\n")) else text + "\n"
         run.state = "running"
-        run.future_done_at = None
-        run.future = self._ex.submit(self._send, text if text.endswith((" ", "\n")) else text + "\n")
+        run.last_event = time.time()
+        sent = False
+        if dlg.HAVE_WIN32 and run.main_hwnd:
+            try:
+                sent = winput.send_text(run.main_hwnd, payload)
+            except Exception as ex:
+                run.log("input_failed", text=text, route="window", error=str(ex))
+        if sent:
+            run.log("input", text=text, route="window")
+        else:  # fall back to COM (works only once SendCommand has returned)
+            run.log("input", text=text, route="com")
+            run.future_done_at = None
+            run.future = self._ex.submit(self._send, payload)
         return self.wait(run, budget_s)
 
     def cancel(self) -> dict:
@@ -330,7 +411,10 @@ class Runner:
             return {"status": "nothing to cancel"}
         if run.state == "dialog":
             raise dlg.DialogError("A dialog is open. Close it with c3d_dialog_act (e.g. click Cancel) so its answer is recorded.")
-        run.future = self._ex.submit(self._send, "\x03\x03")
+        if dlg.HAVE_WIN32 and run.main_hwnd:
+            winput.escape(run.main_hwnd)  # works while COM is blocked (prompts, PAN)
+        else:
+            run.future = self._ex.submit(self._send, "\x03\x03")
         time.sleep(1.0)
         run.state = "cancelled"
         run.log("cancelled")

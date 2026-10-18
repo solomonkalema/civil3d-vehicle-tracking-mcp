@@ -103,6 +103,16 @@ def fillet_path(vertices: list[Pt], radii: list[float] | float, build_up: float 
     if len(radii) != n_int:
         raise ValueError(f"expected {n_int} radii, got {len(radii)}")
 
+    # tangent length each fillet takes from its two legs (0 for a straight-through or radius-0 vertex)
+    tans = [0.0] * len(vertices)
+    for i in range(1, len(vertices) - 1):
+        a, b, c = vertices[i - 1], vertices[i], vertices[i + 1]
+        u1 = _unit(b[0] - a[0], b[1] - a[1])
+        u2 = _unit(c[0] - b[0], c[1] - b[1])
+        turn = wrap(math.atan2(u2[1], u2[0]) - math.atan2(u1[1], u1[0]))
+        if abs(turn) >= 1e-6 and radii[i - 1] > 0:
+            tans[i] = radii[i - 1] * math.tan(abs(turn) / 2)
+
     out: list[Pt] = [vertices[0]]
     for i in range(1, len(vertices) - 1):
         a, b, c = vertices[i - 1], vertices[i], vertices[i + 1]
@@ -113,13 +123,14 @@ def fillet_path(vertices: list[Pt], radii: list[float] | float, build_up: float 
         if abs(turn) < 1e-6 or r <= 0:
             out.append(b)
             continue
-        t = r * math.tan(abs(turn) / 2)  # tangent length
-        leg_in = math.dist(a, b) if i == 1 else math.dist(a, b) / 2
-        leg_out = math.dist(b, c) if i == len(vertices) - 2 else math.dist(b, c) / 2
+        t = tans[i]
+        # a leg is shared with the neighbouring fillet only as far as that fillet actually needs it
+        leg_in = math.dist(a, b) - tans[i - 1]
+        leg_out = math.dist(b, c) - tans[i + 1]
         if t > leg_in + 1e-6 or t > leg_out + 1e-6:
             raise ValueError(
-                f"radius {r} m at vertex {i} needs {t:.2f} m tangent length but the legs are "
-                f"{leg_in:.2f} m and {leg_out:.2f} m; reduce the radius or move the vertex"
+                f"radius {r} m at vertex {i} needs {t:.2f} m tangent length but only "
+                f"{leg_in:.2f} m and {leg_out:.2f} m of the legs are free; reduce the radius or move the vertex"
             )
         t1 = (b[0] - u1[0] * t, b[1] - u1[1] * t)
         t2 = (b[0] + u2[0] * t, b[1] + u2[1] * t)
@@ -224,6 +235,11 @@ class RunResult:
 def simulate(v: Vehicle, path: list[Pt], direction: str = "forward", reference: str = "rear_axle", step: float = 0.1) -> RunResult:
     if direction not in ("forward", "reverse"):
         raise ValueError("direction must be 'forward' or 'reverse'")
+    if reference == "auto":
+        # Vehicle Tracking Follow steers the FRONT axle along the guide line when driving forwards (seen live:
+        # a rear-axle check passed at 0.45 m where Follow's envelope touched the planter). Reverse legs are
+        # defined by the rear axle.
+        reference = "front_axle" if direction == "forward" else "rear_axle"
     if reference not in ("rear_axle", "front_axle"):
         raise ValueError("reference must be 'rear_axle' or 'front_axle'")
     if reference == "front_axle" and direction == "reverse":
@@ -512,4 +528,146 @@ def visibility_splay(access_point: Pt, road_heading_deg: float, x_dist: float, y
         "splay_right": [eye, pr],
         "polygon": [pl, eye, pr],
         "note": "Eye point is placed on the right-hand normal of road_heading; pass road_heading +180 deg if it lands on the wrong side.",
+    }
+
+
+# =============================================================================
+# turn-round search (three-point and T-turns), a kinematic check
+# =============================================================================
+def _arc_poses(x: float, y: float, th: float, radius: float, sweep: float, reverse: bool, step: float = 0.1) -> list[tuple[float, float, float]]:
+    """Rear-axle poses along an arc. radius > 0 turns left, < 0 right; 0 = straight of length `sweep`."""
+    out = []
+    if radius == 0:
+        n = max(1, int(sweep / step))
+        d = (-1 if reverse else 1) * sweep / n
+        for _ in range(n):
+            x += d * math.cos(th)
+            y += d * math.sin(th)
+            out.append((x, y, th))
+        return out
+    length = abs(radius * sweep)
+    n = max(1, int(length / step))
+    d = (-1 if reverse else 1) * length / n
+    for _ in range(n):
+        th += d / radius
+        x += d * math.cos(th)
+        y += d * math.sin(th)
+        out.append((x, y, th))
+    return out
+
+
+def turn_search(
+    v: Vehicle,
+    start: tuple[float, float, float],
+    obstacles: list[Obstacle],
+    required: float = 0.3,
+    target_heading: float | None = None,
+    heading_tol_deg: float = 15.0,
+    lateral_band: tuple[float, float] | None = None,
+    max_forward_m: float = 25.0,
+) -> dict:
+    """Search for a three-point (or T) turn that brings a rigid vehicle round to `target_heading`.
+
+    start = (x, y, heading_rad) of the REAR AXLE where the manoeuvre may begin (e.g. driving into a yard).
+    Stage 1 drives forward (a straight then an arc), stage 2 reverses on an arc, stage 3 drives forward on an
+    arc until the heading is within heading_tol of the target (default: start heading + 180 deg).
+    lateral_band = (min, max) of the final position measured across the start heading (e.g. the aisle),
+    optional. Returns the best sequence (largest minimum clearance) or the closest miss. This is a
+    kinematic check, not a Vehicle Tracking run, and must be labelled as such.
+    """
+    if v.articulated:
+        raise ValueError("turn_search covers rigid vehicles only")
+    target = wrap(start[2] + math.pi) if target_heading is None else target_heading
+    rmin = v.min_rear_axle_radius
+    radii = [rmin * f for f in (1.02, 1.12, 1.25)]
+    geoms = [o.geom for o in obstacles]
+    union = None
+    try:
+        from shapely.ops import unary_union
+
+        union = unary_union(geoms) if geoms else None
+    except Exception:
+        union = None
+
+    def clr(poses: list[tuple[float, float, float]]) -> float:
+        if union is None:
+            return 99.0
+        worst = 99.0
+        for x, y, th in poses[::3]:
+            b = _rect(x, y, th, v.rear_overhang, v.wheelbase + v.front_overhang, v.width / 2)
+            if b.intersects(union):
+                return -1.0
+            worst = min(worst, b.distance(union))
+        return worst
+
+    sx, sy, sth = start
+    best: dict | None = None
+    near: dict | None = None
+    tried = 0
+    for lead in [x * 0.5 for x in range(0, int(max_forward_m / 0.5) + 1, 2)]:
+        base = _arc_poses(sx, sy, sth, 0, lead, False) if lead else []
+        c0 = clr(base) if base else 99.0
+        if c0 < 0:
+            break  # driving further forward hits something
+        x0, y0, t0 = base[-1] if base else start
+        for s1 in (1, -1):
+            for r1 in radii:
+                for a1 in (15, 30, 45, 60, 75, 90):
+                    p1 = _arc_poses(x0, y0, t0, s1 * r1, math.radians(a1), False)
+                    c1 = clr(p1)
+                    if c1 < 0:
+                        continue
+                    for s2 in (1, -1):
+                        for r2 in radii:
+                            for a2 in (30, 45, 60, 75, 90, 105, 120):
+                                p2 = _arc_poses(*p1[-1], s2 * r2, math.radians(a2), True)
+                                c2 = clr(p2)
+                                if c2 < 0:
+                                    continue
+                                x2, y2, t2 = p2[-1]
+                                for s3 in (1, -1):
+                                    for r3 in radii:
+                                        dt = wrap(target - t2)
+                                        sweep = dt if s3 > 0 else -dt
+                                        if sweep < 0:
+                                            sweep += 2 * math.pi
+                                        if sweep > math.radians(150):
+                                            continue
+                                        tried += 1
+                                        p3 = _arc_poses(x2, y2, t2, s3 * r3, sweep, False)
+                                        xe, ye, te = p3[-1]
+                                        if lateral_band is not None:
+                                            lat = -(xe - sx) * math.sin(sth) + (ye - sy) * math.cos(sth)
+                                            if not (lateral_band[0] <= lat <= lateral_band[1]):
+                                                continue
+                                        c3 = clr(p3)
+                                        m = min(c0, c1, c2, c3)
+                                        cand = {
+                                            "min_clearance_m": round(m, 3),
+                                            "stages": [
+                                                {"stage": "forward", "lead_in_m": lead, "radius_m": round(s1 * r1, 2), "turn_deg": a1,
+                                                 "rear_axle_path": [(round(p[0], 3), round(p[1], 3)) for p in (base + p1)[::5]]},
+                                                {"stage": "reverse", "radius_m": round(s2 * r2, 2), "turn_deg": a2,
+                                                 "rear_axle_path": [(round(p[0], 3), round(p[1], 3)) for p in p2[::5]]},
+                                                {"stage": "forward", "radius_m": round(s3 * r3, 2), "turn_deg": round(math.degrees(sweep), 1),
+                                                 "rear_axle_path": [(round(p[0], 3), round(p[1], 3)) for p in p3[::5]]},
+                                            ],
+                                        }
+                                        if m >= 0 and (best is None or m > best["min_clearance_m"]):
+                                            best = cand
+                                        if m < 0 and (near is None or m > near["min_clearance_m"]):
+                                            near = cand
+    if best and best["min_clearance_m"] >= required:
+        verdict = f"three-point turn found with {best['min_clearance_m']:.2f} m minimum clearance"
+    elif best:
+        verdict = f"a three-point turn only fits with {best['min_clearance_m']:.2f} m clearance, below the {required:.2f} m target"
+    else:
+        verdict = "no three-point turn fits; the vehicle cannot turn round here in three moves"
+    return {
+        "vehicle": v.name,
+        "verdict": verdict,
+        "pass": bool(best and best["min_clearance_m"] >= required),
+        "best": best,
+        "sequences_tried": tried,
+        "label": "Kinematic check (built-in engine), not a Vehicle Tracking run.",
     }

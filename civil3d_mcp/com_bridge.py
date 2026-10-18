@@ -37,6 +37,7 @@ except ImportError:  # lets the geometry tools and tests run elsewhere
     HAVE_COM = False
 
 RPC_RETRY = {-2147418111, -2147417846}  # CALL_REJECTED, SERVERCALL_RETRYLATER
+SERVER_VERSION = "0.3.0"
 WORK_DIR_NAME = "Claude outputs"
 WORK_TAG = "_claude"
 
@@ -126,11 +127,72 @@ class Civil3D:
                     time.sleep(0.25)
                     continue
                 if e.hresult in RPC_RETRY:
-                    raise Civil3DError(
-                        "Civil 3D is busy and is rejecting calls. A command or dialog is probably waiting "
-                        "for input (for example a Vehicle Tracking settings box). Finish or cancel it, then retry."
-                    ) from e
+                    raise Civil3DError(self.busy_reason()) from e
                 raise
+            except AttributeError as e:
+                # Late-bound COM reports a rejected call as AttributeError '<unknown>.Name' (seen live with
+                # PAN active and at Vehicle Tracking prompts). Treat it as busy, not as a missing property.
+                if "<unknown>" not in str(e):
+                    raise
+                if time.time() < end:
+                    time.sleep(0.25)
+                    continue
+                raise Civil3DError(self.busy_reason()) from e
+
+    # ------------------------------------------------------------------ window-side view of Civil 3D
+    def main_hwnd(self) -> int:
+        """Main window handle, remembered from the last time COM answered (needed when it does not)."""
+        if getattr(self, "_hwnd", 0):
+            return self._hwnd
+        try:
+            self._hwnd = int(self.app().HWND)
+        except Exception:
+            self._hwnd = 0
+        return self._hwnd
+
+    def busy_reason(self) -> str:
+        """Explain why Civil 3D is refusing COM, read through the window (works while COM is blocked)."""
+        from . import dialogs as dlg
+        from . import winput
+
+        h = getattr(self, "_hwnd", 0)
+        bits = ["Civil 3D is busy and refusing COM calls."]
+        if h and dlg.HAVE_WIN32:
+            try:
+                if not dlg.win32gui.IsWindowEnabled(h):
+                    bits.append("A modal dialog is open in Civil 3D.")
+                lines = winput.command_line_text(h, dlg._pid_of(h))
+                if lines:
+                    bits.append(f"Command line: '{lines[-1]}'.")
+            except Exception:
+                pass
+        bits.append("If a command such as PAN or a prompt is active, c3d_clear_command cancels it from here.")
+        return " ".join(bits)
+
+    def clear_command(self, wait_s: float = 6.0) -> dict:
+        """Cancel any command left running (PAN, a prompt, a half-finished command) by Esc through the window."""
+        from . import winput
+
+        h = self.main_hwnd()
+        before = None
+        try:
+            before = self._retry(lambda: self.doc().GetVariable("CMDNAMES"), timeout=2)
+            if not before:
+                return {"cleared": False, "note": "no command was active"}
+        except Civil3DError:
+            before = "(busy: refusing COM)"
+        if not h:
+            raise Civil3DError("Cannot find the Civil 3D window to send Esc to.")
+        end = time.time() + wait_s
+        while time.time() < end:
+            winput.escape(h)
+            time.sleep(0.6)
+            try:
+                if not self._retry(lambda: self.doc().GetVariable("CMDNAMES"), timeout=1):
+                    return {"cleared": True, "was": before}
+            except Civil3DError:
+                continue
+        raise Civil3DError(f"Esc did not clear the active command ({before}). {self.busy_reason()}")
 
     def app(self):
         if self._app is not None:
@@ -142,6 +204,10 @@ class Civil3D:
             except Exception:
                 self._app = None
         self._app = attach_app()
+        try:
+            self._hwnd = int(self._app.HWND)
+        except Exception:
+            pass
         return self._app
 
     def doc(self):
@@ -184,14 +250,17 @@ class Civil3D:
         run = None if r is None else {"run_id": r.id, "label": r.label, "state": r.state}
         if self._dialog_open():
             return {"run": run, "note": "A dialog is waiting; Civil 3D is not taking other calls. Use c3d_run_status."}
-        app = self.app()
-        d = self.doc()
+        try:
+            app = self.app()
+            d = self.doc()
+        except Civil3DError as e:
+            return {"server_version": SERVER_VERSION, "run": run, "busy": True, "reason": str(e)}
         try:
             full = self._retry(lambda: d.FullName) or "(unsaved)"
         except Exception:
             full = "(unsaved)"
         return {
-            "server_version": "0.2.0",
+            "server_version": SERVER_VERSION,
             "run": run,
             "application": self._retry(lambda: app.Name),
             "version": self._retry(lambda: app.Version),
@@ -224,8 +293,14 @@ class Civil3D:
     # ------------------------------------------------------------------ originals
     @staticmethod
     def is_working_copy(path: str) -> bool:
+        if not path:
+            return False
         p = path.replace("\\", "/")
-        return f"/{WORK_DIR_NAME}/" in p or Path(p).stem.endswith(WORK_TAG)
+        if f"/{WORK_DIR_NAME}/" in p or Path(p).stem.endswith(WORK_TAG):
+            return True
+        # 'x_claude.dxf.dwg' (a DXF copied by v0.2) and drawings made by c3d_new_drawing are registered
+        stem = Path(p).name.split(".")[0]
+        return stem.endswith(WORK_TAG) or os.path.normcase(os.path.abspath(path)) in _registry()
 
     def guard_write(self) -> None:
         if self.allow_original:
@@ -240,25 +315,72 @@ class Civil3D:
                 "set_original_protection(false) if you really mean to edit the original."
             )
 
-    def make_working_copy(self, folder: str | None = None, suffix: str = WORK_TAG) -> dict:
+    def _save_as_dwg(self, d, dst: Path) -> None:
+        """SaveAs as a DWG whatever the source format (a DXF source otherwise came out as 'x.dxf.dwg')."""
+        try:
+            self._retry(lambda: d.SaveAs(str(dst), 64))  # 64 = ac2018_dwg (current native format)
+        except Exception:
+            self._retry(lambda: d.SaveAs(str(dst)))
+        _register(str(dst))
+
+    def make_working_copy(self, folder: str | None = None, suffix: str = WORK_TAG, name: str | None = None) -> dict:
+        """Save the active drawing as a working copy and switch to it. Always a .dwg.
+
+        A never-saved drawing has no original to protect: it is saved straight into `folder` as `name`."""
         d = self.doc()
         src = self._retry(lambda: d.FullName)
         if not src:
-            raise Civil3DError("The drawing has never been saved; save it once so there is an original to protect.")
+            if not folder:
+                raise Civil3DError("This drawing has never been saved. Give `folder` (the job folder) and optionally `name`.")
+            out_dir = Path(folder)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            dst = _unique(out_dir / f"{Path(name or 'Drawing').stem}{suffix}.dwg")
+            self._save_as_dwg(d, dst)
+            self.activate()
+            return {"original": None, "working_copy": str(dst), "note": "unsaved drawing saved straight into the folder"}
         if self.is_working_copy(src):
             return {"working_copy": src, "note": "already a working copy"}
         srcp = Path(src)
         out_dir = Path(folder) if folder else srcp.parent / WORK_DIR_NAME
         out_dir.mkdir(parents=True, exist_ok=True)
-        dst = out_dir / f"{srcp.stem}{suffix}{srcp.suffix}"
-        n = 2
-        while dst.exists():
-            dst = out_dir / f"{srcp.stem}{suffix}_{n}{srcp.suffix}"
-            n += 1
+        stem = srcp.name.split(".")[0] if srcp.suffix.lower() != ".dwg" else srcp.stem
+        dst = _unique(out_dir / f"{name and Path(name).stem or stem}{suffix}.dwg")
         # SaveAs writes the in-memory drawing to the new path and makes it the active file.
         # The original on disk is not written.
-        self._retry(lambda: d.SaveAs(str(dst)))
+        self._save_as_dwg(d, dst)
+        self.activate()
         return {"original": src, "working_copy": str(dst)}
+
+    def new_drawing(self, folder: str, name: str, template: str | None = None) -> dict:
+        """Start a new metric drawing, save it into `folder` as `name`.dwg and make it the active working copy."""
+        app = self.app()
+        docs = self._retry(lambda: app.Documents)
+        d = self._retry(lambda: docs.Add(template) if template else docs.Add(), timeout=60)
+        self._retry(lambda: d.Activate())
+        out_dir = Path(folder)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dst = _unique(out_dir / f"{Path(name).stem}.dwg")
+        self._save_as_dwg(d, dst)
+        for var, val in (("INSUNITS", 6), ("DYNMODE", 0)):
+            try:
+                self.set_var(var, val)
+            except Exception:
+                pass
+        self.lisp('(progn (setq mcp:s (entget (tblobjname "STYLE" "Standard"))) (entmod (subst (cons 3 "arial.ttf") (assoc 3 mcp:s) mcp:s)) "ok")')
+        self.qsave()
+        return {"drawing": str(dst), "working_copy": True, "insunits": 6, "standard_font": "arial.ttf", "template": template or "(Civil 3D default)"}
+
+    def activate(self) -> None:
+        """Bring the active document's tab to the front so the person sees the work."""
+        try:
+            d = self.doc()
+            self._retry(lambda: d.Activate(), timeout=5)
+        except Exception:
+            pass
+
+    def zoom_window(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        app = self.app()
+        self._retry(lambda: app.ZoomWindow(self.vpt(x1, y1), self.vpt(x2, y2)))
 
     def open_drawing(self, path: str, read_only: bool = False) -> dict:
         app = self.app()
@@ -481,17 +603,78 @@ class Civil3D:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         fp = path.replace("\\", "/")
         old = self.get_var("FILEDIA")
+        ctr, size = self.get_var("VIEWCTR"), self.get_var("VIEWSIZE")  # the person's view, restored after
+        used = None
         try:
             self.set_var("FILEDIA", 0)
+            self.lisp("(sssetfirst nil nil)")  # a pickfirst selection made one export ignore its window
             if window:
                 x1, y1, x2, y2 = window
-                self.send(f'(command "_.ZOOM" "_W" "{x1},{y1}" "{x2},{y2}")')
+                try:
+                    self.zoom_window(x1, y1, x2, y2)
+                except Exception:
+                    self.send(f'(command "_.ZOOM" "_W" "{x1},{y1}" "{x2},{y2}")')
+                c, h = self.get_var("VIEWCTR"), float(self.get_var("VIEWSIZE"))
+                used = {"center": [round(c[0], 3), round(c[1], 3)], "view_height_m": round(h, 3)}
             if Path(path).exists():
                 Path(path).unlink()
             self.send(f'(command "_.PNGOUT" "{fp}" "")')
         finally:
             self.set_var("FILEDIA", old)
-        return {"png": path, "exists": Path(path).exists()}
+            try:
+                self.send(f'(command "_.ZOOM" "_C" "{ctr[0]},{ctr[1]}" {float(size)})')
+            except Exception:
+                pass
+        out = {"png": path, "exists": Path(path).exists(), "view_restored": True}
+        if used:
+            out["window_used"] = used
+            try:
+                from PIL import Image
+
+                with Image.open(path) as im:
+                    out["pixels"] = list(im.size)
+                    out["metres_per_pixel"] = round(used["view_height_m"] / im.size[1], 6)
+            except Exception:
+                pass
+        return out
+
+
+_REG_FILE = None
+
+
+def _reg_path() -> Path:
+    from .catalogue import HOME
+
+    return HOME / "working_copies.json"
+
+
+def _registry() -> set[str]:
+    import json
+
+    f = _reg_path()
+    try:
+        return set(json.loads(f.read_text(encoding="utf-8")))
+    except Exception:
+        return set()
+
+
+def _register(path: str) -> None:
+    import json
+
+    reg = _registry()
+    reg.add(os.path.normcase(os.path.abspath(path)))
+    f = _reg_path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(sorted(reg), indent=1), encoding="utf-8")
+
+
+def _unique(dst: Path) -> Path:
+    n = 2
+    base = dst
+    while dst.exists():
+        dst = base.with_name(f"{base.stem}_{n}{base.suffix}")
+        n += 1
+    return dst
 
 
 def copy_file_to_working(src: str) -> str:
