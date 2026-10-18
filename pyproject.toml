@@ -1,0 +1,25 @@
+[project]
+name = "civil3d-mcp"
+version = "0.2.0"
+description = "MCP server for Autodesk Civil 3D over COM: general drawing access plus transport modules (swept paths, Vehicle Tracking, junctions, sight distance)"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2",
+    "shapely>=2.0",
+    "pillow>=10",
+    "pywin32>=306; sys_platform == 'win32'",
+    "pywinauto>=0.6.8; sys_platform == 'win32'",
+]
+
+[project.scripts]
+civil3d-mcp = "civil3d_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["civil3d_mcp"]
+
+[tool.setuptools.package-data]
+civil3d_mcp = ["dialog_catalogue_seed.json"]

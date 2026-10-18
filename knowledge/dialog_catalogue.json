@@ -1,0 +1,420 @@
+{
+  "version": 1,
+  "note": "Seeded from the live Vehicle Tracking runs on 18 Oct 2026 (Civil 3D 2027 Metric, Vehicle Tracking 2027). Entries start unconfirmed: the first live sighting of each comes back to Claude, who confirms it with c3d_dialog_act (learn=...), which records the exact control fingerprint. Only after that can a task answer it without Claude.",
+  "workflows": {
+    "vt_follow": {
+      "questions": [
+        "Which drawing? It is run on a working copy, never the original.",
+        "Which vehicle(s), as a library path, e.g. South African Design Vehicles > SANRAL > SU - Single Unit?",
+        "For each vehicle: which stages (in, park, reverse, out) and the direction of each (Forwards / Reverse)?",
+        "Is a raster layout attached? File, scale and dpi?",
+        "If Follow cannot track a line at design speed: accept the reduced speed and record it as a finding, or stop and report?",
+        "Clearance to report against (default 0.3 m) and the obstacle layers.",
+        "Set the Vehicle Tracking drawing defaults now (1 unit = 1 m, drive on the left, prompt for scale off)?",
+        "Outputs: PNG windows, vehicle profiles, where the DWG is saved."
+      ]
+    }
+  },
+  "entries": [
+    {
+      "id": "vt.default_vehicle",
+      "workflows": [
+        "vt_follow"
+      ],
+      "title": "Autodesk Vehicle Tracking",
+      "text_contains": "Do you wish to follow using the default vehicle",
+      "description": "Asks whether Follow should use the current default vehicle named in the text. Yes uses it; No opens the Vehicle Library Explorer.",
+      "kind": "per_task",
+      "question": "Which vehicle?",
+      "answer_format": {
+        "when_text_matches": "<vehicle name, e.g. SU - Single Unit>",
+        "actions": [
+          {
+            "click": "Yes"
+          }
+        ]
+      },
+      "confirmed": true,
+      "fingerprints": [
+        "321c2ad3489e"
+      ],
+      "seen": 16,
+      "first_seen": "2026-10-18T18:41:00",
+      "notes": "Appears on every DRIVEFOLLOW unless a path was preselected. Seen with the default P - Passenger Car.",
+      "last_seen": "2026-10-18T22:19:36",
+      "example": {
+        "windows": [
+          {
+            "title": "Autodesk Vehicle Tracking",
+            "active": true,
+            "text": [
+              "Do you wish to follow using the default vehicle (P - Passenger Car)?"
+            ],
+            "controls": [
+              {
+                "id": "c1",
+                "type": "Button",
+                "name": "Yes"
+              },
+              {
+                "id": "c2",
+                "type": "Button",
+                "name": "No"
+              },
+              {
+                "id": "c3",
+                "type": "Text",
+                "name": "Do you wish to follow using the default vehicle (P - Passenger Car)?"
+              }
+            ],
+            "unreadable": [
+              "1 drawn area(s) with no readable text (e.g. a diagram); use c3d_dialog_image to see them"
+            ]
+          }
+        ]
+      },
+      "confirmed_on": "2026-10-18T21:33:45"
+    },
+    {
+      "id": "vt.drawing_settings",
+      "workflows": [
+        "vt_follow"
+      ],
+      "title": "Drawing Settings",
+      "text_contains": "",
+      "description": "Vehicle Tracking drawing settings (pages Scale / Surfaces / Paths). Shown the first time Vehicle Tracking is used in a drawing while 'Prompt for scale (and other drawing settings) on first use' is ticked. Seen: 1 Drawing Unit represents 1 metres; Driving convention greyed at 'Vehicles drive on the right' because 'Get below values from drawing where available' is ticked.",
+      "kind": "fixed",
+      "question": "Confirm the fixed answer once: 1 unit = 1 m and drive on the left (Uganda). Untick 'Get below values from drawing where available' to change the driving side.",
+      "answer_format": {
+        "actions": [
+          {
+            "check": {
+              "label": "Get below values from drawing where available",
+              "value": false
+            }
+          },
+          {
+            "select": {
+              "label": "Vehicles drive on the left",
+              "value": true
+            }
+          },
+          {
+            "click": "OK"
+          }
+        ]
+      },
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 2,
+      "first_seen": "2026-10-18T18:41:30",
+      "notes": "Not seen on the second run in the same drawing.",
+      "last_seen": "2026-10-18T21:33:46"
+    },
+    {
+      "id": "vt.vehicle_library",
+      "workflows": [
+        "vt_follow"
+      ],
+      "title": "Vehicle Library Explorer",
+      "text_contains": "",
+      "description": "Vehicle library tree (library > group > vehicle, columns Width, Length, W/W Radius) with Make Default, Print, Proceed, Close. A separate 'Vehicle Diagram' window opens beside it and shows the selected vehicle's dimensions.",
+      "kind": "per_task",
+      "question": "Which vehicle, as a full library path?",
+      "answer_format": {
+        "actions": [
+          {
+            "tree": [
+              "South African Design Vehicles",
+              "SANRAL",
+              "SU - Single Unit"
+            ]
+          },
+          {
+            "click": "Proceed"
+          }
+        ]
+      },
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 1,
+      "first_seen": "2026-10-18T18:45:40",
+      "notes": "Opens after No on vt.default_vehicle. Check that the Vehicle Diagram values match the task's vehicle before Proceed."
+    },
+    {
+      "id": "vt.follow_settings",
+      "workflows": [
+        "vt_follow"
+      ],
+      "title": "Settings",
+      "text_contains": "Direction",
+      "description": "Follow Settings dialog: Start Direction and Position combos, Algorithm and Optimisations (greyed), Generate an editable path, OK/Cancel.",
+      "kind": "per_run",
+      "question": "Direction for this stage (Forwards or Reverse)",
+      "answer_format": {
+        "actions": [
+          {
+            "select": {
+              "label": "Direction",
+              "value": "Forwards"
+            }
+          },
+          {
+            "select": {
+              "label": "Position",
+              "value": "Automatic"
+            }
+          },
+          {
+            "click": "OK"
+          }
+        ]
+      },
+      "confirmed": true,
+      "fingerprints": [
+        "08dd149c3c71"
+      ],
+      "seen": 6,
+      "first_seen": "2026-10-18T18:42:20",
+      "notes": "Appears on every Follow run. The dialog remembers the last direction, so it is always set explicitly.",
+      "last_seen": "2026-10-18T22:20:41",
+      "example": {
+        "windows": [
+          {
+            "title": "Settings",
+            "active": true,
+            "text": [
+              "Direction",
+              "Direction",
+              "Position",
+              "Position",
+              "m",
+              "m"
+            ],
+            "controls": [
+              {
+                "id": "c1",
+                "type": "Group",
+                "name": "Start"
+              },
+              {
+                "id": "c2",
+                "type": "Text",
+                "name": "Direction"
+              },
+              {
+                "id": "c3",
+                "type": "ComboBox",
+                "name": "Direction",
+                "label": "Direction",
+                "value": "Forwards",
+                "options": [
+                  "Direction",
+                  "Direction",
+                  "Close"
+                ]
+              },
+              {
+                "id": "c4",
+                "type": "Text",
+                "name": "Direction"
+              },
+              {
+                "id": "c5",
+                "type": "Button",
+                "name": "Open"
+              },
+              {
+                "id": "c6",
+                "type": "Text",
+                "name": "Position"
+              },
+              {
+                "id": "c7",
+                "type": "ComboBox",
+                "name": "Position",
+                "label": "Position",
+                "value": "Automatic",
+                "options": [
+                  "Position",
+                  "Position",
+                  "Close"
+                ]
+              },
+              {
+                "id": "c8",
+                "type": "Text",
+                "name": "Position"
+              },
+              {
+                "id": "c9",
+                "type": "Button",
+                "name": "Open"
+              },
+              {
+                "id": "c10",
+                "type": "Group",
+                "name": "Algorithm",
+                "enabled": false
+              },
+              {
+                "id": "c11",
+                "type": "RadioButton",
+                "name": "Split line into lengths of",
+                "selected": true,
+                "enabled": false
+              },
+              {
+                "id": "c12",
+                "type": "RadioButton",
+                "name": "Track vertices only",
+                "selected": false,
+                "enabled": false
+              },
+              {
+                "id": "c13",
+                "type": "Edit",
+                "value": "2.5",
+                "enabled": false
+              },
+              {
+                "id": "c14",
+                "type": "Text",
+                "name": "m"
+              },
+              {
+                "id": "c15",
+                "type": "Group",
+                "name": "Optimisations",
+                "enabled": false
+              },
+              {
+                "id": "c16",
+                "type": "CheckBox",
+                "name": "Ignore vertices closer than",
+                "checked": true,
+                "enabled": false
+              },
+              {
+                "id": "c17",
+                "type": "Edit",
+                "value": "0.5",
+                "enabled": false
+              },
+              {
+                "id": "c18",
+                "type": "Text",
+                "name": "m"
+              },
+              {
+                "id": "c19",
+                "type": "CheckBox",
+                "name": "Optimise resulting path by removing unnecessary target points",
+                "checked": true,
+                "enabled": false
+              },
+              {
+                "id": "c20",
+                "type": "CheckBox",
+                "name": "Follow line as closely as possible (by dropping unreachable points)",
+                "checked": true,
+                "enabled": false
+              },
+              {
+                "id": "c21",
+                "type": "CheckBox",
+                "name": "Generate an editable path",
+                "checked": false
+              },
+              {
+                "id": "c22",
+                "type": "Button",
+                "name": "Make Default"
+              },
+              {
+                "id": "c23",
+                "type": "Button",
+                "name": "Reset"
+              },
+              {
+                "id": "c24",
+                "type": "Button",
+                "name": "OK"
+              },
+              {
+                "id": "c25",
+                "type": "Button",
+                "name": "Cancel"
+              },
+              {
+                "id": "c26",
+                "type": "Button",
+                "name": "Help"
+              },
+              {
+                "id": "c27",
+                "type": "Tree"
+              },
+              {
+                "id": "c28",
+                "type": "Button",
+                "name": "Column left"
+              },
+              {
+                "id": "c29",
+                "type": "Button",
+                "name": "Page right"
+              },
+              {
+                "id": "c30",
+                "type": "Button",
+                "name": "Column right"
+              },
+              {
+                "id": "c31",
+                "type": "TreeItem",
+                "name": "Follow Drive",
+                "selected": true,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c32",
+                "type": "TreeItem",
+                "name": "Paths",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              }
+            ]
+          }
+        ]
+      },
+      "confirmed_on": "2026-10-18T21:56:10"
+    },
+    {
+      "id": "vt.speed_reduction",
+      "workflows": [
+        "vt_follow"
+      ],
+      "title": "Autodesk Vehicle Tracking",
+      "text_contains": "unable to track the selected line",
+      "description": "'Follow has been unable to track the selected line closely without exceeding the current vehicle capabilities... Would you like Follow with the fastest speed at which the line can be followed?' (Yes / No).",
+      "kind": "judgement",
+      "question": "If it appears: accept the reduced speed and record it as a finding, or stop and report?",
+      "answer_format": {
+        "actions": [
+          {
+            "click": "Yes"
+          }
+        ],
+        "record_as_finding": "Follow could not track the guide line at design speed; the speed was reduced."
+      },
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 2,
+      "first_seen": "2026-10-18T18:42:30",
+      "notes": "Seen on a 15 m and a 20 m bend with no transition; the SU then ran at 2.34 km/h. Usually means the guide line needs a steering build-up or a wider radius."
+    }
+  ]
+}

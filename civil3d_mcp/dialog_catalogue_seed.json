@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "note": "Seeded from the live Vehicle Tracking runs on 18 Oct 2026 (Civil 3D 2027 Metric, Vehicle Tracking 2027). Entries start unconfirmed: the first live sighting of each comes back to Claude, who confirms it with c3d_dialog_act (learn=...), which records the exact control fingerprint. Only after that can a task answer it without Claude.",
+  "workflows": {
+    "vt_follow": {
+      "questions": [
+        "Which drawing? It is run on a working copy, never the original.",
+        "Which vehicle(s), as a library path, e.g. South African Design Vehicles > SANRAL > SU - Single Unit?",
+        "For each vehicle: which stages (in, park, reverse, out) and the direction of each (Forwards / Reverse)?",
+        "Is a raster layout attached? File, scale and dpi?",
+        "If Follow cannot track a line at design speed: accept the reduced speed and record it as a finding, or stop and report?",
+        "Clearance to report against (default 0.3 m) and the obstacle layers.",
+        "Set the Vehicle Tracking drawing defaults now (1 unit = 1 m, drive on the left, prompt for scale off)?",
+        "Outputs: PNG windows, vehicle profiles, where the DWG is saved."
+      ]
+    }
+  },
+  "entries": [
+    {
+      "id": "vt.default_vehicle",
+      "workflows": ["vt_follow"],
+      "title": "Autodesk Vehicle Tracking",
+      "text_contains": "follow using the default vehicle",
+      "description": "Asks whether Follow should use the current default vehicle, named in the text, e.g. 'Do you wish to follow using the default vehicle (P - Passenger Car)?'. Yes uses it; No opens the Vehicle Library Explorer.",
+      "kind": "per_task",
+      "question": "Which vehicle? The server clicks Yes only when the vehicle named in the dialog is the task's vehicle.",
+      "answer_format": {"when_text_matches": "<vehicle name, e.g. SU - Single Unit>", "actions": [{"click": "Yes"}]},
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 2,
+      "first_seen": "2026-10-18T18:41:00",
+      "notes": "Appears on every DRIVEFOLLOW unless a path was preselected. Seen with the default P - Passenger Car."
+    },
+    {
+      "id": "vt.drawing_settings",
+      "workflows": ["vt_follow"],
+      "title": "Drawing Settings",
+      "text_contains": "",
+      "description": "Vehicle Tracking drawing settings (pages Scale / Surfaces / Paths). Shown the first time Vehicle Tracking is used in a drawing while 'Prompt for scale (and other drawing settings) on first use' is ticked. Seen: 1 Drawing Unit represents 1 metres; Driving convention greyed at 'Vehicles drive on the right' because 'Get below values from drawing where available' is ticked.",
+      "kind": "fixed",
+      "question": "Confirm the fixed answer once: 1 unit = 1 m and drive on the left (Uganda). Untick 'Get below values from drawing where available' to change the driving side.",
+      "answer_format": {"actions": [{"check": {"label": "Get below values from drawing where available", "value": false}}, {"select": {"label": "Vehicles drive on the left", "value": true}}, {"click": "OK"}]},
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 1,
+      "first_seen": "2026-10-18T18:41:30",
+      "notes": "Not seen on the second run in the same drawing."
+    },
+    {
+      "id": "vt.vehicle_library",
+      "workflows": ["vt_follow"],
+      "title": "Vehicle Library Explorer",
+      "text_contains": "",
+      "description": "Vehicle library tree (library > group > vehicle, columns Width, Length, W/W Radius) with Make Default, Print, Proceed, Close. A separate 'Vehicle Diagram' window opens beside it and shows the selected vehicle's dimensions.",
+      "kind": "per_task",
+      "question": "Which vehicle, as a full library path?",
+      "answer_format": {"actions": [{"tree": ["South African Design Vehicles", "SANRAL", "SU - Single Unit"]}, {"click": "Proceed"}]},
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 1,
+      "first_seen": "2026-10-18T18:45:40",
+      "notes": "Opens after No on vt.default_vehicle. Check that the Vehicle Diagram values match the task's vehicle before Proceed."
+    },
+    {
+      "id": "vt.follow_settings",
+      "workflows": ["vt_follow"],
+      "title": "Settings",
+      "text_contains": "direction",
+      "description": "Follow settings: Start Direction (Forwards / Reverse / Keep Current / Automatic), Position (Automatic / Manual), Generate an editable path, Algorithm (split line into lengths of, track vertices only), Optimisations.",
+      "kind": "per_run",
+      "question": "Direction for each stage (Forwards or Reverse). Position is Automatic unless stated.",
+      "answer_format": {"actions": [{"select": {"label": "Direction", "value": "Forwards"}}, {"select": {"label": "Position", "value": "Automatic"}}, {"click": "OK"}]},
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 2,
+      "first_seen": "2026-10-18T18:42:20",
+      "notes": "Appears on every Follow run. The dialog remembers the last direction, so it is always set explicitly."
+    },
+    {
+      "id": "vt.speed_reduction",
+      "workflows": ["vt_follow"],
+      "title": "Autodesk Vehicle Tracking",
+      "text_contains": "unable to track the selected line",
+      "description": "'Follow has been unable to track the selected line closely without exceeding the current vehicle capabilities... Would you like Follow with the fastest speed at which the line can be followed?' (Yes / No).",
+      "kind": "judgement",
+      "question": "If it appears: accept the reduced speed and record it as a finding, or stop and report?",
+      "answer_format": {"actions": [{"click": "Yes"}], "record_as_finding": "Follow could not track the guide line at design speed; the speed was reduced."},
+      "confirmed": false,
+      "fingerprints": [],
+      "seen": 2,
+      "first_seen": "2026-10-18T18:42:30",
+      "notes": "Seen on a 15 m and a 20 m bend with no transition; the SU then ran at 2.34 km/h. Usually means the guide line needs a steering build-up or a wider radius."
+    }
+  ]
+}
