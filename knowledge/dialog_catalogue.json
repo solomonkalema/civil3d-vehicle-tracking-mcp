@@ -38,10 +38,10 @@
       "fingerprints": [
         "321c2ad3489e"
       ],
-      "seen": 16,
+      "seen": 17,
       "first_seen": "2026-10-18T18:41:00",
       "notes": "Appears on every DRIVEFOLLOW unless a path was preselected. Seen with the default P - Passenger Car.",
-      "last_seen": "2026-10-18T22:19:36",
+      "last_seen": "2026-10-18T23:29:53",
       "example": {
         "windows": [
           {
@@ -117,10 +117,10 @@
         "vt_follow"
       ],
       "title": "Vehicle Library Explorer",
-      "text_contains": "",
-      "description": "Vehicle library tree (library > group > vehicle, columns Width, Length, W/W Radius) with Make Default, Print, Proceed, Close. A separate 'Vehicle Diagram' window opens beside it and shows the selected vehicle's dimensions.",
+      "text_contains": "Overall Length",
+      "description": "Vehicle Library Explorer with the Vehicle Diagram window; tree of libraries; Proceed uses the selected vehicle. Tree item names are not exposed to UI Automation in VT 2027, so check the diagram text for the selected vehicle.",
       "kind": "per_task",
-      "question": "Which vehicle, as a full library path?",
+      "question": "Which vehicle (library path)?",
       "answer_format": {
         "actions": [
           {
@@ -135,11 +135,791 @@
           }
         ]
       },
-      "confirmed": false,
-      "fingerprints": [],
+      "confirmed": true,
+      "fingerprints": [
+        "6eb501e1d471"
+      ],
       "seen": 1,
       "first_seen": "2026-10-18T18:45:40",
-      "notes": "Opens after No on vt.default_vehicle. Check that the Vehicle Diagram values match the task's vehicle before Proceed."
+      "notes": "Opens after No on vt.default_vehicle. Check that the Vehicle Diagram values match the task's vehicle before Proceed.",
+      "example": {
+        "windows": [
+          {
+            "title": "Vehicle Library Explorer    (Dims: m, deg, sec, km/h)",
+            "active": true,
+            "text": [
+              "SU - Single Unit  Overall Length 9.1m"
+            ],
+            "controls": [
+              {
+                "id": "c1",
+                "type": "Window",
+                "name": "Vehicle Diagram"
+              },
+              {
+                "id": "c2",
+                "type": "Text",
+                "name": "SU - Single Unit  Overall Length 9.1m"
+              },
+              {
+                "id": "c3",
+                "type": "Button",
+                "name": "~Zoom Ext"
+              },
+              {
+                "id": "c4",
+                "type": "Button",
+                "name": "~Zoom In"
+              },
+              {
+                "id": "c5",
+                "type": "Button",
+                "name": "~Zoom Out"
+              },
+              {
+                "id": "c6",
+                "type": "Button",
+                "name": "~S+"
+              },
+              {
+                "id": "c7",
+                "type": "Button",
+                "name": "~S-"
+              },
+              {
+                "id": "c8",
+                "type": "Button",
+                "name": "~A+"
+              },
+              {
+                "id": "c9",
+                "type": "Button",
+                "name": "~A-"
+              },
+              {
+                "id": "c10",
+                "type": "CheckBox",
+                "name": "~Auto Scale",
+                "checked": true
+              },
+              {
+                "id": "c11",
+                "type": "CheckBox",
+                "name": "~Show scale",
+                "checked": true
+              },
+              {
+                "id": "c12",
+                "type": "CheckBox",
+                "name": "~Show dimensions",
+                "checked": true
+              },
+              {
+                "id": "c13",
+                "type": "CheckBox",
+                "name": "~Loads",
+                "checked": false
+              },
+              {
+                "id": "c14",
+                "type": "CheckBox",
+                "name": "~Outlines",
+                "checked": false
+              },
+              {
+                "id": "c15",
+                "type": "CheckBox",
+                "name": "~Simple",
+                "checked": false
+              },
+              {
+                "id": "c16",
+                "type": "CheckBox",
+                "name": "~TP",
+                "checked": false
+              },
+              {
+                "id": "c17",
+                "type": "RadioButton",
+                "name": "~Bodies",
+                "selected": false
+              },
+              {
+                "id": "c18",
+                "type": "RadioButton",
+                "name": "~Chassis",
+                "selected": false
+              },
+              {
+                "id": "c19",
+                "type": "RadioButton",
+                "name": "~Both",
+                "selected": true
+              },
+              {
+                "id": "c20",
+                "type": "RadioButton",
+                "name": "~Level",
+                "selected": false
+              },
+              {
+                "id": "c21",
+                "type": "RadioButton",
+                "name": "~Image",
+                "selected": false
+              },
+              {
+                "id": "c22",
+                "type": "MenuBar",
+                "name": "System"
+              },
+              {
+                "id": "c23",
+                "type": "MenuItem",
+                "name": "System"
+              },
+              {
+                "id": "c24",
+                "type": "Button",
+                "name": "Proceed"
+              },
+              {
+                "id": "c25",
+                "type": "Button",
+                "name": "Help"
+              },
+              {
+                "id": "c26",
+                "type": "RadioButton",
+                "name": "~Group",
+                "selected": true
+              },
+              {
+                "id": "c27",
+                "type": "RadioButton",
+                "name": "~Cat",
+                "selected": false
+              },
+              {
+                "id": "c28",
+                "type": "RadioButton",
+                "name": "~Class",
+                "selected": false
+              },
+              {
+                "id": "c29",
+                "type": "RadioButton",
+                "name": "~Type",
+                "selected": false
+              },
+              {
+                "id": "c30",
+                "type": "RadioButton",
+                "name": "~Name",
+                "selected": false
+              },
+              {
+                "id": "c31",
+                "type": "CheckBox",
+                "name": "~Library",
+                "checked": false
+              },
+              {
+                "id": "c32",
+                "type": "Button",
+                "name": "~Wizard"
+              },
+              {
+                "id": "c33",
+                "type": "CheckBox",
+                "name": "~Diagram",
+                "checked": true
+              },
+              {
+                "id": "c34",
+                "type": "Button",
+                "name": "~Columns"
+              },
+              {
+                "id": "c35",
+                "type": "Pane",
+                "name": "Custom1"
+              },
+              {
+                "id": "c36",
+                "type": "Tree"
+              },
+              {
+                "id": "c37",
+                "type": "Button",
+                "name": "Line up"
+              },
+              {
+                "id": "c38",
+                "type": "Button",
+                "name": "Page up"
+              },
+              {
+                "id": "c39",
+                "type": "Button",
+                "name": "Line down"
+              },
+              {
+                "id": "c40",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c41",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c42",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c43",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c44",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c45",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c46",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c47",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c48",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": true,
+                "depth": 0
+              },
+              {
+                "id": "c49",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": true,
+                "depth": 1
+              },
+              {
+                "id": "c50",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 2
+              },
+              {
+                "id": "c51",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 2
+              },
+              {
+                "id": "c52",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 2
+              },
+              {
+                "id": "c53",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 2
+              },
+              {
+                "id": "c54",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 2
+              },
+              {
+                "id": "c55",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c56",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c57",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c58",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c59",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c60",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c61",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c62",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c63",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c64",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c65",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c66",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c67",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c68",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c69",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c70",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c71",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c72",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c73",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c74",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c75",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c76",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c77",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c78",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c79",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c80",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c81",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c82",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c83",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": true,
+                "depth": 0
+              },
+              {
+                "id": "c84",
+                "type": "TreeItem",
+                "selected": true,
+                "expanded": false,
+                "depth": 1
+              },
+              {
+                "id": "c85",
+                "type": "TreeItem",
+                "selected": false,
+                "expanded": false,
+                "depth": 1
+              },
+              {
+                "id": "c86",
+                "type": "Header",
+                "name": "Header Control"
+              },
+              {
+                "id": "c87",
+                "type": "HeaderItem",
+                "name": "Name"
+              },
+              {
+                "id": "c88",
+                "type": "HeaderItem",
+                "name": "Width"
+              },
+              {
+                "id": "c89",
+                "type": "HeaderItem",
+                "name": "Length"
+              },
+              {
+                "id": "c90",
+                "type": "HeaderItem",
+                "name": "W/W Rad"
+              },
+              {
+                "id": "c91",
+                "type": "Button",
+                "name": "Print..."
+              },
+              {
+                "id": "c92",
+                "type": "Button",
+                "name": "Make Default",
+                "enabled": false
+              },
+              {
+                "id": "c93",
+                "type": "Button",
+                "name": "Search"
+              },
+              {
+                "id": "c94",
+                "type": "ComboBox",
+                "options": [
+                  "Open"
+                ]
+              },
+              {
+                "id": "c95",
+                "type": "Edit"
+              },
+              {
+                "id": "c96",
+                "type": "Button",
+                "name": "Open"
+              },
+              {
+                "id": "c97",
+                "type": "Button",
+                "name": "Context help"
+              },
+              {
+                "id": "c98",
+                "type": "MenuBar",
+                "name": "Application"
+              },
+              {
+                "id": "c99",
+                "type": "MenuItem",
+                "name": "File"
+              },
+              {
+                "id": "c100",
+                "type": "MenuItem",
+                "name": "Edit"
+              },
+              {
+                "id": "c101",
+                "type": "MenuItem",
+                "name": "Drive"
+              },
+              {
+                "id": "c102",
+                "type": "MenuItem",
+                "name": "Settings"
+              },
+              {
+                "id": "c103",
+                "type": "MenuItem",
+                "name": "Help"
+              }
+            ],
+            "unreadable": [
+              "1 drawn area(s) with no readable text (e.g. a diagram); use c3d_dialog_image to see them"
+            ]
+          },
+          {
+            "title": "Vehicle Diagram",
+            "active": true,
+            "text": [
+              "SU - Single Unit  Overall Length 9.1m"
+            ],
+            "controls": [
+              {
+                "id": "c104",
+                "type": "Text",
+                "name": "SU - Single Unit  Overall Length 9.1m"
+              },
+              {
+                "id": "c105",
+                "type": "Button",
+                "name": "~Zoom Ext"
+              },
+              {
+                "id": "c106",
+                "type": "Button",
+                "name": "~Zoom In"
+              },
+              {
+                "id": "c107",
+                "type": "Button",
+                "name": "~Zoom Out"
+              },
+              {
+                "id": "c108",
+                "type": "Button",
+                "name": "~S+"
+              },
+              {
+                "id": "c109",
+                "type": "Button",
+                "name": "~S-"
+              },
+              {
+                "id": "c110",
+                "type": "Button",
+                "name": "~A+"
+              },
+              {
+                "id": "c111",
+                "type": "Button",
+                "name": "~A-"
+              },
+              {
+                "id": "c112",
+                "type": "CheckBox",
+                "name": "~Auto Scale",
+                "checked": true
+              },
+              {
+                "id": "c113",
+                "type": "CheckBox",
+                "name": "~Show scale",
+                "checked": true
+              },
+              {
+                "id": "c114",
+                "type": "CheckBox",
+                "name": "~Show dimensions",
+                "checked": true
+              },
+              {
+                "id": "c115",
+                "type": "CheckBox",
+                "name": "~Loads",
+                "checked": false
+              },
+              {
+                "id": "c116",
+                "type": "CheckBox",
+                "name": "~Outlines",
+                "checked": false
+              },
+              {
+                "id": "c117",
+                "type": "CheckBox",
+                "name": "~Simple",
+                "checked": false
+              },
+              {
+                "id": "c118",
+                "type": "CheckBox",
+                "name": "~TP",
+                "checked": false
+              },
+              {
+                "id": "c119",
+                "type": "RadioButton",
+                "name": "~Bodies",
+                "selected": false
+              },
+              {
+                "id": "c120",
+                "type": "RadioButton",
+                "name": "~Chassis",
+                "selected": false
+              },
+              {
+                "id": "c121",
+                "type": "RadioButton",
+                "name": "~Both",
+                "selected": true
+              },
+              {
+                "id": "c122",
+                "type": "RadioButton",
+                "name": "~Level",
+                "selected": false
+              },
+              {
+                "id": "c123",
+                "type": "RadioButton",
+                "name": "~Image",
+                "selected": false
+              },
+              {
+                "id": "c124",
+                "type": "MenuBar",
+                "name": "System"
+              },
+              {
+                "id": "c125",
+                "type": "MenuItem",
+                "name": "System"
+              }
+            ],
+            "unreadable": [
+              "1 drawn area(s) with no readable text (e.g. a diagram); use c3d_dialog_image to see them"
+            ]
+          }
+        ]
+      },
+      "confirmed_on": "2026-10-18T23:30:03"
     },
     {
       "id": "vt.follow_settings",
@@ -174,10 +954,10 @@
       "fingerprints": [
         "08dd149c3c71"
       ],
-      "seen": 6,
+      "seen": 7,
       "first_seen": "2026-10-18T18:42:20",
       "notes": "Appears on every Follow run. The dialog remembers the last direction, so it is always set explicitly.",
-      "last_seen": "2026-10-18T22:20:41",
+      "last_seen": "2026-10-18T23:30:10",
       "example": {
         "windows": [
           {
