@@ -1,6 +1,6 @@
 [project]
 name = "civil3d-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server for Autodesk Civil 3D over COM: general drawing access plus transport modules (swept paths, Vehicle Tracking, junctions, sight distance)"
 requires-python = ">=3.10"
 dependencies = [

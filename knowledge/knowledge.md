@@ -107,3 +107,27 @@ These come from §3 and §4. Ask them once, together, before anything runs:
 - **Rule: design vehicles.** The TIA decides the design vehicles. Run the standard DV-1 car and every other design vehicle the TIA names, each found in the full library (vt_vehicle_library) and given its full stage set. A single-vehicle run is not acceptable.
 - **Rule: keep good work.** Never delete a working path to fix something cosmetic. Save after every successful run.
 - **Turn-round.** Follow cannot do multi-point turns; sp_turn_search answers "can it leave in forward gear?" as a labelled kinematic check. Hoima: no three-point turn in the 8.8 m yard with bays occupied; with every bay empty, only 0.09 m clearance.
+
+## Full swept-path cycle (rule from Solomon, 18 Oct 2026, v0.4)
+- A swept path for a vehicle that parks is not one manoeuvre. Show the full cycle with the same vehicle:
+  ingress from the public road in forward gear -> park in a proposed bay -> egress back to the road in forward gear.
+- Pick the most constrained bay of each bay type (deepest in the site, narrowest aisle, furthest from the access).
+- Stages: usually forward in, then forward or reverse into the bay, then out forwards (a reverse out of the bay
+  followed by a forward exit is fine inside the site). Reversing onto or off the public road is a finding.
+- Pre-check the whole sequence with sp_cycle_check (stages join up, the parked body is inside the bay, clearances),
+  then run each stage in Vehicle Tracking with the same vehicle and report them as one cycle (runs VT-n in order).
+- Service vehicles that do not park: ingress -> stand or turn -> egress.
+
+## Ramps in section (v0.4)
+- Plan swept paths do not prove a ramp. For each vehicle that uses a ramp, run sp_ramp_section on the long section:
+  breakover at crests, front overhang at the foot / rear overhang at the head (and the reverse when leaving),
+  roof to soffit, beam or door head.
+- Floor and soffit: trace the architect's section at true scale (vt_attach_pdf_page, check one dimension) as
+  polylines with x = chainage and y = level, drawn left to right, or pass points. A Civil 3D profile works too.
+- Side profile: take 'Min Body Ground Clearance' and 'Overall Body Height' from the vehicle's Vehicle Tracking
+  profile (vt_insert_profile shows them). SANRAL SU: 0.427 m and 3.632 m; SANRAL P: 0.305 m and 1.520 m (the defaults).
+  The VT car clearance is generous: a low saloon sits nearer 0.12 m, so for a car ramp also run ground_clearance=0.12.
+- Defaults: underside margin 0.05 m, headroom margin 0.10 m over the body height. The report also gives grades,
+  grade changes and the static headroom of the ramp itself; compare those with the standard the TIA cites.
+- Transitions: a sharp grade change of 10% or more at a single point grounds a 0.12 m car on a 3.1 m wheelbase;
+  transition lengths of about 2 m in steps of half the grade change usually cure it. Prove it with the tool.

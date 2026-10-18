@@ -21,11 +21,12 @@ except ImportError:  # SDK 1.x
     from mcp.server.fastmcp import FastMCP as _Server
     from mcp.server.fastmcp import Image as _Image
 
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon
 
 from . import civil as civ
 from . import dwg
 from . import geometry as geo
+from . import section as sec
 from . import vt
 from .catalogue import HOME
 from .com_bridge import Civil3D, Civil3DError
@@ -34,7 +35,7 @@ from .runner import DialogPending
 from .vehicles import Vehicle, all_vehicles, get_vehicle, save_user_vehicle
 
 INSTRUCTIONS = """
-Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.3.
+Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.4.
 
 Ground rules:
 - Never edit the user's original drawing. Call c3d_make_working_copy first; drawing-changing tools refuse otherwise.
@@ -74,7 +75,20 @@ Swept-path task flow (v0.3; the person should never need to touch Civil 3D):
 5. For each vehicle and stage: sp_build_guide -> sp_check_guide (reference auto = front axle forwards, as Follow
    steers) -> vt_follow_run(guide_handle=..., vehicle=..., vehicle_path=...) -> vt_check_path ->
    vt_insert_profile once per vehicle (no x, y: placed beside the plan). Save after every good run.
-6. 'Leaves in forward gear?' is answered by sp_turn_search (Follow cannot do multi-point turns).
+6. Full cycle for every vehicle that parks: ingress -> park -> egress, same vehicle, one connected sequence.
+   Drive in from the public road in forward gear, park in a proposed bay (the most constrained bay of each
+   bay type, e.g. the deepest, narrowest or furthest), then leave in forward gear back to the road. Stages
+   may be forward in, reverse into the bay (direction Reverse), forward out. Check the whole sequence with
+   sp_cycle_check first (continuity between stages, body wholly inside the bay when parked, clearances), then
+   run each stage in Vehicle Tracking. Service vehicles that do not park: ingress -> stand/turn -> egress.
+   Reversing onto or off the public road is a finding, never a passing result.
+   'Leaves in forward gear?' after a dead end is answered by sp_turn_search (Follow cannot do multi-point turns).
+6a. Ramps (basement or podium access): plan swept paths do not prove a ramp. Check the long section with
+   sp_ramp_section for every vehicle that uses the ramp: underside grounding at crests (breakover) and at
+   the foot and head (approach/departure overhangs), and roof to soffit/beam/door-head headroom, in both
+   directions. Floor and soffit come from the architect's section (trace it at true scale after
+   vt_attach_pdf_page) or from a Civil 3D profile. Use the Vehicle Tracking profile's 'Min Body Ground
+   Clearance' and 'Overall Body Height' for the vehicle; say so when an indicative value is used.
 7. Figures with c3d_export_png (the person's view is restored afterwards).
 Never delete a good path to fix something cosmetic; fix it in place or note it. If Civil 3D is stuck in a
 command (PAN, a prompt), c3d_clear_command cancels it from here: do not ask the person to press Esc.
@@ -691,6 +705,138 @@ async def sp_turn_search(
     res["obstacles_read"] = len(obs)
     return res
 
+
+
+def _section_poly(points, handle, what):
+    if points:
+        pts = [(float(a), float(b)) for a, b in points]
+    elif handle:
+        pts = [tuple(p) for p in C.call(dwg.polyline_points, C, handle)]
+    else:
+        return None
+    if len(pts) >= 2 and pts[0][0] > pts[-1][0]:
+        pts = pts[::-1]  # drawn right to left
+    return pts
+
+
+@mcp.tool()
+async def sp_ramp_section(
+    vehicle: str,
+    floor_points: list[list[float]] | None = None,
+    floor_handle: str | None = None,
+    soffit_points: list[list[float]] | None = None,
+    soffit_handle: str | None = None,
+    ground_clearance: float | None = None,
+    overhang_clearance: float | None = None,
+    body_height: float | None = None,
+    required_underbody_m: float = 0.05,
+    required_headroom_m: float = 0.10,
+    orientations: str = "both",
+    png_path: str | None = None,
+    draw_layer: str | None = None,
+    title: str | None = None,
+) -> dict:
+    """Ramp check in long section: can the vehicle drive along the ramp without grounding or hitting the soffit?
+    Floor (and optional soffit: slab underside, beams, door head) as (chainage, level) points or a polyline
+    drawn in section at true scale (x = chainage, y = level). Checks breakover at crests, front and rear
+    overhangs at the foot and head, and roof headroom, with the vehicle facing both ways (in and out
+    forwards). Side-profile values default to the Vehicle Tracking profile figures where known (SU) and to
+    indicative values otherwise: pass the VT profile's Min Body Ground Clearance and Overall Body Height.
+    png_path writes a colour section figure with a scale bar; draw_layer draws the vehicle at its critical
+    positions into the drawing (same coordinates as the section)."""
+    try:
+        v = get_vehicle(vehicle)
+        floor = await asyncio.to_thread(_section_poly, floor_points, floor_handle, "floor")
+        if not floor:
+            raise ValueError("Give the floor as points or a polyline handle.")
+        soffit = await asyncio.to_thread(_section_poly, soffit_points, soffit_handle, "soffit")
+        d = dict(sec.SIDE_DEFAULTS.get(v.name.upper(), sec.SIDE_DEFAULTS["P"] if v.length < 6.5 else sec.SIDE_DEFAULTS["SU"]))
+        given = [x is not None for x in (ground_clearance, overhang_clearance, body_height)]
+        side = sec.SideProfile(
+            v.name, v.wheelbase, v.front_overhang, v.rear_overhang,
+            ground_clearance if ground_clearance is not None else d["ground_clearance"],
+            overhang_clearance if overhang_clearance is not None else (ground_clearance if ground_clearance is not None else d["overhang_clearance"]),
+            body_height if body_height is not None else d["body_height"],
+            "values supplied" if all(given) else (d["source"] if not any(given) else
+                "partly supplied (" + ", ".join(f"{n} {x}" for n, x in zip(("ground clearance", "overhang clearance", "body height"),
+                (ground_clearance, overhang_clearance, body_height)) if x is not None) + "); rest from " + d["source"]),
+        )
+        res = await asyncio.to_thread(sec.ramp_check, side, floor, soffit, 0.1, required_underbody_m,
+                                      required_headroom_m, orientations)
+        if png_path:
+            res["png"] = await asyncio.to_thread(sec.render_png, png_path, side, floor, soffit, res,
+                                                 title or f"Ramp check in section: {v.description}")
+    except (ValueError, KeyError, Civil3DError) as e:
+        return {"error": str(e)}
+    if draw_layer:
+        hs = []
+        for key, col in (("underbody", 30), ("headroom", 1)):
+            pose = res["_worst_poses"].get(key)
+            if pose:
+                hs.append(await run(C.add_polyline, [list(p) for p in sec.outline(side, *pose)], draw_layer, col))
+        res["drawn"] = hs
+    res.pop("_worst_poses", None)
+    res["vehicle_plan_dimensions_source"] = v.source
+    return res
+
+
+@mcp.tool()
+async def sp_cycle_check(
+    vehicle: str,
+    stages: list[dict],
+    obstacle_layers: str | None = None,
+    bay_points: list[list[float]] | None = None,
+    bay_handle: str | None = None,
+    park_stage: int | None = None,
+    required_clearance_m: float = 0.3,
+    joint_tolerance_m: float = 0.5,
+) -> dict:
+    """Full-cycle check for one vehicle: ingress -> park -> egress as one connected sequence.
+    stages: in driving order, each {"name": "ingress", "guide_points": [[x, y], ...] or "guide_handle": "...",
+    "direction": "forward" | "reverse"}. Checks each stage (steering, clearances), that each stage starts
+    where the previous one ended (within joint_tolerance_m and 15 degrees), and, with a bay outline, that the
+    body at the end of the park stage (default: the last stage before the final one) lies wholly inside the
+    bay. Run this before the Vehicle Tracking stages; it does not replace them."""
+    try:
+        v = get_vehicle(vehicle)
+        obs = await asyncio.to_thread(_obstacles, obstacle_layers)
+        results, prev_end = [], None
+        joints_ok = True
+        for i, st in enumerate(stages):
+            guide = await asyncio.to_thread(_guide, st.get("guide_points"), st.get("guide_handle"), st.get("guide_txt"))
+            direction = st.get("direction", "forward")
+            r = geo.simulate(v, guide, direction, "auto")
+            c = geo.clearance(v, r, obs, required_clearance_m)
+            start, end = r.poses[0], r.poses[-1]
+            rec = {"stage": st.get("name", f"stage {i + 1}"), "direction": direction,
+                   "length_m": _r(end.s), "max_steer_deg": r.max_steer_used_deg, "warnings": r.warnings,
+                   "clearance": c}
+            if prev_end is not None:
+                gap = math.hypot(start.x - prev_end.x, start.y - prev_end.y)
+                dth = abs((math.degrees(start.theta - prev_end.theta) + 180) % 360 - 180)
+                ok = gap <= joint_tolerance_m and dth <= 15
+                joints_ok &= ok
+                rec["joint_with_previous"] = {"gap_m": _r(gap), "heading_change_deg": round(dth, 1), "ok": ok}
+            results.append((rec, r))
+            prev_end = end
+        out = {"vehicle": v.name, "stages": [x[0] for x in results], "stages_connected": joints_ok}
+        bay = await asyncio.to_thread(_section_poly, bay_points, bay_handle, "bay") if (bay_points or bay_handle) else None
+        if bay:
+            k = park_stage if park_stage is not None else max(0, len(stages) - 2)
+            body = geo.bodies(v, results[k][1].poses[-1])[0]
+            bp = Polygon(bay)
+            outside = body.difference(bp)
+            out["parked"] = {"stage": results[k][0]["stage"], "inside_bay": outside.area < 0.01,
+                             "area_outside_m2": round(outside.area, 3),
+                             "max_distance_outside_m": round(max((bp.exterior.distance(Point(p)) for p in body.exterior.coords
+                                                                  if not bp.buffer(1e-6).contains(Point(p))), default=0.0), 3)}
+        all_clear = all(x[0]["clearance"].get("pass", True) and not x[0]["warnings"] for x in results)
+        out["passes"] = joints_ok and all_clear and out.get("parked", {}).get("inside_bay", True)
+        out["obstacles_read"] = len(obs)
+        out["note"] = "Kinematic pre-check. Report the Vehicle Tracking runs of the same stages as the result."
+        return out
+    except (ValueError, KeyError, Civil3DError) as e:
+        return {"error": str(e)}
 
 @mcp.tool()
 async def sp_parked_vehicles(bays: list[list[float]], vehicle: str = "P", layer: str = "SP-OBS-PARKED", color: int = 30) -> dict:

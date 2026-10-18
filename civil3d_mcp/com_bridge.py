@@ -37,7 +37,7 @@ except ImportError:  # lets the geometry tools and tests run elsewhere
     HAVE_COM = False
 
 RPC_RETRY = {-2147418111, -2147417846}  # CALL_REJECTED, SERVERCALL_RETRYLATER
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 WORK_DIR_NAME = "Claude outputs"
 WORK_TAG = "_claude"
 
