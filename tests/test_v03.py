@@ -1,4 +1,4 @@
-"""v0.3 fixes from the Hoima job (18 Oct 2026)."""
+"""v0.3 fixes from a swept-path job (18 Oct 2026)."""
 
 import os
 import tempfile
@@ -74,6 +74,6 @@ def test_turn_search_open_road_finds_a_turn():
 
 
 def test_working_copy_names():
-    assert Civil3D.is_working_copy(r"G:\\Jobs\\Hoima\\Hoima_swept_path_base_claude.dxf.dwg")
-    assert Civil3D.is_working_copy(r"G:\\Jobs\\Hoima\\x_claude.dwg")
-    assert not Civil3D.is_working_copy(r"G:\\Jobs\\Hoima\\Architect.dwg")
+    assert Civil3D.is_working_copy(r"C:\\Jobs\\SiteA\\site_swept_path_base_claude.dxf.dwg")
+    assert Civil3D.is_working_copy(r"C:\\Jobs\\SiteA\\x_claude.dwg")
+    assert not Civil3D.is_working_copy(r"C:\\Jobs\\SiteA\\Architect.dwg")

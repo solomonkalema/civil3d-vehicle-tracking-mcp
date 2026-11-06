@@ -42,6 +42,7 @@ except ImportError:
 
 LOG_DIR = HOME / "run_logs"
 MAX_BLOCK_S = 40.0  # never hold a tool call longer than this
+TRANSIENT_MAX_S = 90.0  # a 'Please Wait' splash longer than this is reported as a dialog
 RPC_RETRY = {-2147418111, -2147417846}
 
 
@@ -96,6 +97,7 @@ class Run:
         self.last_event = time.time()  # last dialog answered / input sent: prompts are judged from here
         self.prompt_patterns: list[str] | None = None
         self.prompt_text: str | None = None
+        self.transient_since: float | None = None  # a 'Please Wait' splash has been up since
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.log_file = LOG_DIR / f"{self.id}.jsonl"
 
@@ -178,7 +180,12 @@ class Runner:
         end = time.time() + budget_s
         while time.time() < end:
             if run.state == "dialog" and run.pending:
-                return self.pending_payload(run)
+                if self._pending_alive(run):
+                    return self.pending_payload(run)
+                # Closed outside the server (by the person, or by Civil 3D itself): forget it and keep
+                # watching, so the next dialog (e.g. the Library Explorer behind a splash) is seen.
+                self._dialog_gone(run)
+                continue
             # 1. dialogs first: they are what blocks everything else
             if dlg.HAVE_WIN32 and run.pid:
                 found = dlg.new_dialogs(run.pid, run.main_hwnd, run.baseline)
@@ -236,6 +243,22 @@ class Runner:
             time.sleep(0.3)
         return {"status": "running", "run_id": run.id, "elapsed_s": round(time.time() - run.started), "next": "Still running with no dialog. Call c3d_run_status to keep watching."}
 
+    @staticmethod
+    def _pending_hwnds(run: Run) -> list[int]:
+        snap = (run.pending or {}).get("snapshot") or {}
+        return [w["hwnd"] for w in snap.get("windows", []) if "hwnd" in w]
+
+    def _pending_alive(self, run: Run) -> bool:
+        return dlg.alive(self._pending_hwnds(run))
+
+    def _dialog_gone(self, run: Run, by: str = "outside the server") -> None:
+        did = (run.pending or {}).get("id")
+        run.log("dialog_closed", dialog_id=did, by=by)
+        run.answered.append({"dialog_id": did, "by": by, "actions": ["closed without an answer from the server"]})
+        run.pending = None
+        run.state = "running"
+        run.last_event = time.time()
+
     def _prompt_while_blocked(self, run: Run) -> dict | None:
         """Handle a command-line prompt while COM is blocked (SendCommand has not returned)."""
         try:
@@ -247,6 +270,15 @@ class Runner:
         if quiet < 1.0:
             return None
         lines = winput.command_line_text(run.main_hwnd, run.pid)
+        stuck = winput.lisp_continuation(lines)
+        if stuck:
+            winput.escape(run.main_hwnd, 3)
+            run.state = "failed"
+            run.error = (f"Civil 3D was left at an unfinished LISP prompt ('{stuck.strip()}'): the expression was "
+                         "incomplete or was cut off on the way in. Esc was sent to clear it. Send long LISP with "
+                         "c3d_lisp (it now goes through a file) or split it.")
+            run.log("failed", error=run.error)
+            return self._final(run)
         prompt = winput.looks_like_prompt(lines, run.prompt_patterns)
         if run.inputs and (prompt or quiet > 3.0):
             text = run.inputs.pop(0)
@@ -279,6 +311,15 @@ class Runner:
                 return None
             snap = dlg.snapshot(keep)
             hwnds = keep
+        if dlg.is_transient(snap):
+            if run.transient_since is None:
+                run.transient_since = time.time()
+                run.log("transient", title=[w.get("title") for w in snap["windows"]])
+            if time.time() - run.transient_since < TRANSIENT_MAX_S:
+                time.sleep(0.5)
+                return None  # a busy splash: wait for it to close, then look again
+        else:
+            run.transient_since = None
         m = self.catalogue.match(snap)
         self.catalogue.observe(snap, m)
         e = m.get("entry")
@@ -351,7 +392,11 @@ class Runner:
         old = run.pending["snapshot"]
         hwnds = [w["hwnd"] for w in old["windows"] if dlg.win32gui.IsWindow(w["hwnd"])] if dlg.HAVE_WIN32 else []
         if not hwnds:
-            raise dlg.DialogError("The dialog has closed on its own. Call c3d_run_status.")
+            self._dialog_gone(run, by="closed before the answer was applied")
+            out = self.wait(run, budget_s)
+            out["note"] = ("That dialog had already closed (by the person or by Civil 3D), so nothing was clicked. "
+                           "The run carried on; this is its current state.")
+            return out
         snap = dlg.snapshot(hwnds)  # fresh read: values may have changed since it was reported
         if learn:
             learn = dict(learn)
@@ -405,12 +450,21 @@ class Runner:
             run.future = self._ex.submit(self._send, payload)
         return self.wait(run, budget_s)
 
-    def cancel(self) -> dict:
+    def cancel(self, force: bool = False) -> dict:
         run = self.active
         if run is None or not run.open:
             return {"status": "nothing to cancel"}
         if run.state == "dialog":
-            raise dlg.DialogError("A dialog is open. Close it with c3d_dialog_act (e.g. click Cancel) so its answer is recorded.")
+            if not self._pending_alive(run):
+                self._dialog_gone(run)
+            elif force:
+                for h in self._pending_hwnds(run):
+                    winput.escape(h, 1)  # Esc = Cancel on a modal dialog
+                run.log("forced_cancel", dialog_id=(run.pending or {}).get("id"))
+                run.pending = None
+            else:
+                raise dlg.DialogError("A dialog is open. Close it with c3d_dialog_act (e.g. click Cancel) so its answer is "
+                                      "recorded, or use c3d_run_cancel(force=True) to press Esc on it.")
         if dlg.HAVE_WIN32 and run.main_hwnd:
             winput.escape(run.main_hwnd)  # works while COM is blocked (prompts, PAN)
         else:

@@ -1,6 +1,6 @@
 [project]
 name = "civil3d-mcp"
-version = "0.4.0"
+version = "0.9.0"
 description = "MCP server for Autodesk Civil 3D over COM: general drawing access plus transport modules (swept paths, Vehicle Tracking, junctions, sight distance)"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,10 +9,11 @@ dependencies = [
     "pillow>=10",
     "pywin32>=306; sys_platform == 'win32'",
     "pywinauto>=0.6.8; sys_platform == 'win32'",
+    "pymupdf>=1.24",
 ]
 
 [project.optional-dependencies]
-pdf = ["pymupdf>=1.24"]
+dxf = ["ezdxf>=1.1"]
 
 [project.scripts]
 civil3d-mcp = "civil3d_mcp.server:main"

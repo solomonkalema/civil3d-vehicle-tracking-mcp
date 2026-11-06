@@ -84,7 +84,7 @@ class Vehicle:
         return d
 
 
-# MoWT RDM Table 5-1 / SANRAL naming, as used on the Leceny and Biplous jobs.
+# MoWT RDM Table 5-1 / SANRAL naming, as used on earlier TIA jobs.
 BUILTIN: dict[str, Vehicle] = {
     "P": Vehicle(
         name="P",

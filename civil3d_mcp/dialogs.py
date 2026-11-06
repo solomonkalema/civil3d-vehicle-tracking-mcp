@@ -12,6 +12,7 @@ and this code has to keep working exactly then.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,20 @@ def top_windows(pid: int) -> list[int]:
     return out
 
 
+def _enabled(h: int) -> bool:
+    try:
+        return bool(win32gui.IsWindowEnabled(h))
+    except Exception:  # closed meanwhile
+        return False
+
+
+def _class(h: int) -> str:
+    try:
+        return win32gui.GetClassName(h)
+    except Exception:  # closed meanwhile
+        return ""
+
+
 def _is_dialog_like(h: int) -> bool:
     try:
         l, t, r, b = win32gui.GetWindowRect(h)
@@ -84,6 +99,60 @@ def _is_dialog_like(h: int) -> bool:
         return True
     except Exception:
         return False
+
+
+TRANSIENT_TITLE = re.compile(r"please wait|loading|processing|working|initiali[sz]ing", re.I)
+# Progress windows that close by themselves but carry a Cancel button (road pilot, 27 Oct 2026: 'Plot Progress'
+# during -PLOT). Pressing Cancel there aborts the work, so they are waited out like a splash, never answered.
+PROGRESS_TITLE = re.compile(r"plot( job)? progress|plotting progress|^plotting|publish(ing)? (progress|job)|batch plot|"
+                            r"regenerat|rebuilding|computing materials|processing background", re.I)
+PROGRESS_BUTTONS = {"cancel", "cancel sheet", "cancel entire job", "close", "details", "hide", ""}
+ACTIONABLE = {"Button", "Edit", "ComboBox", "CheckBox", "RadioButton", "Tree", "List", "Spinner"}
+
+
+def is_progress(w: dict) -> bool:
+    """A progress window: a progress title and nothing to answer beyond Cancel/Close."""
+    if not PROGRESS_TITLE.search(w.get("title") or ""):
+        return False
+    for c in w.get("controls", []):
+        t = c.get("type")
+        if t == "Button" and str(c.get("name") or "").strip().lower() not in PROGRESS_BUTTONS:
+            return False
+        if t in ACTIONABLE - {"Button"}:
+            return False
+    return True
+
+
+def is_transient(snapshot: dict) -> bool:
+    """A busy splash ('Vehicle Tracking. Please Wait....'): nothing to answer, it closes by itself.
+
+    Seen live (20 Oct 2026): the server reported the splash as a dialog to answer and then kept
+    reporting it after it had closed, while the real Library Explorer opened behind it.
+    """
+    wins = snapshot.get("windows", [])
+    if not wins:
+        return False
+    for w in wins:
+        if is_progress(w):
+            continue
+        if not TRANSIENT_TITLE.search(w.get("title") or ""):
+            return False
+        if any(c.get("type") in ACTIONABLE for c in w.get("controls", [])):
+            return False
+    return True
+
+
+def alive(hwnds: list[int]) -> bool:
+    """True while any of the windows still exists and is visible."""
+    if not HAVE_WIN32:
+        return True
+    for h in hwnds:
+        try:
+            if win32gui.IsWindow(h) and win32gui.IsWindowVisible(h):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def new_dialogs(pid: int, main_hwnd: int, baseline: set[int]) -> dict:
@@ -100,11 +169,12 @@ def new_dialogs(pid: int, main_hwnd: int, baseline: set[int]) -> dict:
     fresh = [h for h in tops if h != main_hwnd and h not in baseline and _is_dialog_like(h)]
     if modal and not fresh:
         # a modal is up but it predates the run (e.g. left over): report whatever is enabled
-        fresh = [h for h in tops if h != main_hwnd and _is_dialog_like(h) and win32gui.IsWindowEnabled(h)]
+        fresh = [h for h in tops if h != main_hwnd and _is_dialog_like(h) and _enabled(h)]
     if not modal:
-        fresh = [h for h in fresh if win32gui.GetClassName(h) == "#32770" and win32gui.IsWindowEnabled(h)]
+        fresh = [h for h in fresh if _class(h) == "#32770" and _enabled(h)]
     # put the enabled (active) window first: that is the one waiting for an answer
-    fresh.sort(key=lambda h: (not win32gui.IsWindowEnabled(h), h))
+    fresh = [h for h in fresh if win32gui.IsWindow(h)]
+    fresh.sort(key=lambda h: (not _enabled(h), h))
     return {"modal": modal, "hwnds": fresh}
 
 
@@ -125,7 +195,12 @@ def snapshot(hwnds: list[int]) -> dict:
                 w = None
                 err = f"UI Automation could not read this window ({type(e).__name__}); win32 fallback used"
         if w is None:
-            w = _read_win32(h, n)
+            try:
+                w = _read_win32(h, n)
+            except Exception:
+                # The window closed while it was being read (pywintypes 1400 'Invalid window handle', seen when
+                # a plot progress window closed mid-read on 27 Oct 2026). Nothing is waiting there any more.
+                continue
             if HAVE_UIA:
                 w.setdefault("unreadable", []).append(err)
         n += len(w["controls"])
@@ -342,8 +417,11 @@ def _combo_items(h: int) -> list[str]:
 def _find(snap: dict, ref: dict | str, types: tuple[str, ...] | None = None) -> tuple[dict, dict]:
     """Find a control by id ('c7'), by label, or by name. Returns (window, control)."""
     if isinstance(ref, str):
-        ref = {"id": ref} if ref[:1] == "c" and ref[1:].isdigit() else {"name": ref}
+        ref = {"id": ref} if _is_id(ref) else {"name": ref}
     want_id = ref.get("id")
+    for k in ("label", "name"):  # {"label": "c60"} means the control with id c60 (unlabelled edit boxes)
+        if not want_id and _is_id(ref.get(k) or ""):
+            want_id = ref[k]
     want = (ref.get("label") or ref.get("name") or "").strip().lower().rstrip(":")
     hits = []
     for w in snap["windows"]:
@@ -359,6 +437,10 @@ def _find(snap: dict, ref: dict | str, types: tuple[str, ...] | None = None) -> 
     # prefer an enabled control in the active (first) window
     hits.sort(key=lambda wc: (not wc[1].get("enabled", True), snap["windows"].index(wc[0])))
     return hits[0]
+
+
+def _is_id(x: str) -> bool:
+    return bool(x) and x[:1] == "c" and x[1:].isdigit()
 
 
 def _uia(w: dict, c: dict):
@@ -382,6 +464,8 @@ def perform(snap: dict, actions: list[dict]) -> list[str]:
     {"check": {"label": "Prompt for scale", "value": false}}  checkbox
     {"type": {"label": "Split line into lengths of", "value": "2.5"}}  text field
     {"tree": ["South African Design Vehicles", "SANRAL", "SU - Single Unit"]}  select a tree item by path
+    {"tree_keys": [...]}  the same by keyboard type-ahead, for trees whose items expose no text
+    {"keys": {"id": "c13", "text": "AASHTO"}}  focus a control and type keys into it
     {"wait": 0.5}
     """
     done = []
@@ -393,6 +477,14 @@ def perform(snap: dict, actions: list[dict]) -> list[str]:
             continue
         if verb == "tree":
             done.append(_tree_select(snap, list(arg)))
+            continue
+        if verb == "tree_keys":
+            done.append(_tree_keys(snap, list(arg)))
+            continue
+        if verb == "keys":
+            w, c = _find(snap, arg)
+            _keys(w, c, str(arg.get("text", "")))
+            done.append(f"typed keys {arg.get('text')!r} into {c.get('label') or c.get('name') or c.get('id')}")
             continue
         ref = arg if isinstance(arg, (str, dict)) else str(arg)
         if verb == "click":
@@ -414,7 +506,7 @@ def perform(snap: dict, actions: list[dict]) -> list[str]:
             _type(w, c, str(arg.get("value", "")))
             done.append(f"typed {arg.get('value')!r} into {c.get('label') or c.get('name')}")
         else:
-            raise DialogError(f"Unknown action '{verb}'. Use click, select, check, type, tree or wait.")
+            raise DialogError(f"Unknown action '{verb}'. Use click, select, check, type, keys, tree, tree_keys or wait.")
         time.sleep(0.25)
     return done
 
@@ -560,7 +652,64 @@ def _tree_select(snap: dict, path: list[str]) -> str:
             if node is not None:
                 node.select()  # SelectionItem pattern; never a mouse click
                 return f"selected {' > '.join(path)}"
+        if trees and not any((x.element_info.name or "").strip() for t in trees for x in t.children()):
+            # The Vehicle Library Explorer exposes its tree items with no names (VT 2027): fall back to typing.
+            return _tree_keys(snap, path)
         raise DialogError(f"Could not find {' > '.join(path)} in any tree of the dialog.")
+    raise DialogError("No tree in the dialog.")
+
+
+_SEND_KEYS_SPECIAL = set("+^%~(){}[]")
+
+
+def _keys_text(text: str) -> str:
+    return "".join("{" + ch + "}" if ch in _SEND_KEYS_SPECIAL else ch for ch in text)
+
+
+def _keys(w: dict, c: dict, text: str) -> None:
+    from pywinauto.keyboard import send_keys  # type: ignore
+
+    x = _uia(w, c) if not c.get("hwnd") else Desktop(backend="uia").window(handle=c["hwnd"]).wrapper_object()
+    x.set_focus()
+    time.sleep(0.2)
+    send_keys(_keys_text(text), pause=0.02, with_spaces=True)
+
+
+def _tree_keys(snap: dict, path: list[str]) -> str:
+    """Select a tree item by keyboard: Home, then for each level type its name (type-ahead jumps to the first
+    visible item that starts with it) and press Right twice (expand, step into the first child).
+
+    For trees whose items UI Automation cannot name. The keystrokes go to the focused dialog, so the dialog is
+    brought to the front first. Verify the result with c3d_dialog_image before Proceed.
+    """
+    if not HAVE_UIA:
+        raise DialogError("Keyboard tree selection needs pywinauto.")
+    from pywinauto.keyboard import send_keys  # type: ignore
+
+    for w in snap["windows"]:
+        win = Desktop(backend="uia").window(handle=w["hwnd"]).wrapper_object()
+        trees = [x for x in win.descendants() if x.element_info.control_type == "Tree"]
+        if not trees:
+            continue
+        tree = trees[0]
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+        tree.set_focus()
+        time.sleep(0.3)
+        send_keys("{HOME}")
+        time.sleep(0.4)
+        for i, step in enumerate(path):
+            time.sleep(1.2)  # let the type-ahead buffer reset so each name starts a fresh search
+            send_keys(_keys_text(step), pause=0.03, with_spaces=True)
+            time.sleep(0.4)
+            if i < len(path) - 1:
+                send_keys("{RIGHT}")
+                time.sleep(0.6)
+                send_keys("{RIGHT}")
+                time.sleep(0.4)
+        return f"selected {' > '.join(path)} by keyboard (verify with c3d_dialog_image before Proceed)"
     raise DialogError("No tree in the dialog.")
 
 

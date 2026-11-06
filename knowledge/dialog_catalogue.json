@@ -13,6 +13,18 @@
         "Set the Vehicle Tracking drawing defaults now (1 unit = 1 m, drive on the left, prompt for scale off)?",
         "Outputs: PNG windows, vehicle profiles, where the DWG is saved."
       ]
+    },
+    "road_production": {
+      "questions": [
+        "Which road and which drawings (alignment, corridor, PnP, CS)? Work only on the copies in the private staging folder, never in the shared project.",
+        "Is the staging copy of the project current? (Refresh it first if a colleague has saved the shared drawings since.)",
+        "Has the promote step been agreed with the person (and the colleague who owns the geometry) for any alignment or profile change?",
+        "Title-block values: designed / checked / approved / drawn initials by the client's rule, date and revision?",
+        "Which plot style (.ctb), and is it installed? If not, where is the file?",
+        "Where do the PDFs go (staging path mirroring the shared project), and what file names?",
+        "Quantities: which sample line group, and is Compute Materials already run? Stake-out interval (default 10 m)?",
+        "Compare against what: the issued PDF book or the client's reference project?"
+      ]
     }
   },
   "entries": [
@@ -38,10 +50,10 @@
       "fingerprints": [
         "321c2ad3489e"
       ],
-      "seen": 17,
+      "seen": 20,
       "first_seen": "2026-10-18T18:41:00",
       "notes": "Appears on every DRIVEFOLLOW unless a path was preselected. Seen with the default P - Passenger Car.",
-      "last_seen": "2026-10-18T23:29:53",
+      "last_seen": "2026-10-20T18:44:34",
       "example": {
         "windows": [
           {
@@ -81,10 +93,10 @@
         "vt_follow"
       ],
       "title": "Drawing Settings",
-      "text_contains": "",
-      "description": "Vehicle Tracking drawing settings (pages Scale / Surfaces / Paths). Shown the first time Vehicle Tracking is used in a drawing while 'Prompt for scale (and other drawing settings) on first use' is ticked. Seen: 1 Drawing Unit represents 1 metres; Driving convention greyed at 'Vehicles drive on the right' because 'Get below values from drawing where available' is ticked.",
+      "text_contains": "1 Drawing Unit represents",
+      "description": "Vehicle Tracking Drawing Settings shown on first use in a drawing.",
       "kind": "fixed",
-      "question": "Confirm the fixed answer once: 1 unit = 1 m and drive on the left (Uganda). Untick 'Get below values from drawing where available' to change the driving side.",
+      "question": "1 unit = 1 m, drive on the left",
       "answer_format": {
         "actions": [
           {
@@ -104,12 +116,219 @@
           }
         ]
       },
-      "confirmed": false,
-      "fingerprints": [],
-      "seen": 2,
+      "confirmed": true,
+      "fingerprints": [
+        "33152087f3a4"
+      ],
+      "seen": 3,
       "first_seen": "2026-10-18T18:41:30",
       "notes": "Not seen on the second run in the same drawing.",
-      "last_seen": "2026-10-18T21:33:46"
+      "last_seen": "2026-10-20T18:43:25",
+      "fixed_actions": [
+        {
+          "check": {
+            "label": "Get below values from drawing where available",
+            "value": false
+          }
+        },
+        {
+          "wait": 0.5
+        },
+        {
+          "select": {
+            "label": "Vehicles drive on the left",
+            "value": true
+          }
+        },
+        {
+          "check": {
+            "label": "Prompt for scale (and other drawing settings) on first use",
+            "value": false
+          }
+        },
+        {
+          "click": "OK"
+        }
+      ],
+      "example": {
+        "windows": [
+          {
+            "title": "Drawing Settings",
+            "active": true,
+            "text": [
+              "1 Drawing Unit represents",
+              "Angles measured clockwise",
+              "WCB of preferred angular datum",
+              "deg"
+            ],
+            "controls": [
+              {
+                "id": "c1",
+                "type": "Group"
+              },
+              {
+                "id": "c2",
+                "type": "CheckBox",
+                "name": "Get below values from drawing where available",
+                "checked": true
+              },
+              {
+                "id": "c3",
+                "type": "Group",
+                "name": "Scale"
+              },
+              {
+                "id": "c4",
+                "type": "Text",
+                "name": "1 Drawing Unit represents"
+              },
+              {
+                "id": "c5",
+                "type": "Edit",
+                "name": "1 Drawing Unit represents",
+                "label": "1 Drawing Unit represents",
+                "value": "1",
+                "enabled": false
+              },
+              {
+                "id": "c6",
+                "type": "ComboBox",
+                "label": "1 Drawing Unit represents",
+                "value": "metres",
+                "enabled": false
+              },
+              {
+                "id": "c7",
+                "type": "Text"
+              },
+              {
+                "id": "c8",
+                "type": "Button",
+                "name": "Open"
+              },
+              {
+                "id": "c9",
+                "type": "CheckBox",
+                "name": "Auto check scale against window size",
+                "checked": true
+              },
+              {
+                "id": "c10",
+                "type": "CheckBox",
+                "name": "Prompt for scale (and other drawing settings) on first use",
+                "checked": true
+              },
+              {
+                "id": "c11",
+                "type": "Group",
+                "name": "Driving convention"
+              },
+              {
+                "id": "c12",
+                "type": "RadioButton",
+                "name": "Vehicles drive on the right",
+                "selected": true,
+                "enabled": false
+              },
+              {
+                "id": "c13",
+                "type": "RadioButton",
+                "name": "Vehicles drive on the left",
+                "selected": false,
+                "enabled": false
+              },
+              {
+                "id": "c14",
+                "type": "Group",
+                "name": "Angles  (these values are read from your CAD system settings)"
+              },
+              {
+                "id": "c15",
+                "type": "CheckBox",
+                "name": "Angles Measured Clockwise",
+                "checked": false,
+                "enabled": false
+              },
+              {
+                "id": "c16",
+                "type": "Text",
+                "name": "Angles measured clockwise"
+              },
+              {
+                "id": "c17",
+                "type": "Text",
+                "name": "WCB of preferred angular datum"
+              },
+              {
+                "id": "c18",
+                "type": "Edit",
+                "name": "WCB of preferred angular datum",
+                "label": "WCB of preferred angular datum",
+                "value": "90"
+              },
+              {
+                "id": "c19",
+                "type": "Text",
+                "name": "deg"
+              },
+              {
+                "id": "c20",
+                "type": "Button",
+                "name": "Make Default"
+              },
+              {
+                "id": "c21",
+                "type": "Button",
+                "name": "Reset"
+              },
+              {
+                "id": "c22",
+                "type": "Button",
+                "name": "OK"
+              },
+              {
+                "id": "c23",
+                "type": "Button",
+                "name": "Cancel"
+              },
+              {
+                "id": "c24",
+                "type": "Button",
+                "name": "Help"
+              },
+              {
+                "id": "c25",
+                "type": "Tree"
+              },
+              {
+                "id": "c26",
+                "type": "TreeItem",
+                "name": "Scale",
+                "selected": true,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c27",
+                "type": "TreeItem",
+                "name": "Surfaces",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              },
+              {
+                "id": "c28",
+                "type": "TreeItem",
+                "name": "Paths",
+                "selected": false,
+                "expanded": false,
+                "depth": 0
+              }
+            ]
+          }
+        ]
+      },
+      "confirmed_on": "2026-10-20T18:43:32"
     },
     {
       "id": "vt.vehicle_library",
@@ -954,10 +1173,10 @@
       "fingerprints": [
         "08dd149c3c71"
       ],
-      "seen": 7,
+      "seen": 8,
       "first_seen": "2026-10-18T18:42:20",
       "notes": "Appears on every Follow run. The dialog remembers the last direction, so it is always set explicitly.",
-      "last_seen": "2026-10-18T23:30:10",
+      "last_seen": "2026-10-20T18:43:43",
       "example": {
         "windows": [
           {

@@ -3,7 +3,7 @@
 Every dialog the server meets is recorded here. A dialog is only ever answered
 without Claude when ALL of these hold:
 
-  * its catalogue entry is confirmed (Solomon or Claude confirmed it once, live),
+  * its catalogue entry is confirmed (the person or Claude confirmed it once, live),
   * its control fingerprint matches one recorded for that entry exactly,
   * its message text still contains the entry's key phrase,
   * the running task supplied an answer for that entry (or the entry has a
@@ -274,13 +274,29 @@ def compact(snapshot: dict, max_controls: int = 120) -> dict:
         if w.get("text"):
             cw["text"] = w["text"]
         ctrls = []
-        for c in w.get("controls", [])[:max_controls]:
+        nameless: dict[str, list[str]] = {}
+        shown = 0
+        for c in w.get("controls", []):
+            # Rows that UI Automation exposes with no text at all (the Vehicle Library tree has ~40) say
+            # nothing to Claude and flooded every reply on a TIA job: count them instead of listing them.
+            if c.get("type") in ("TreeItem", "ListItem", "DataItem") and not (c.get("name") or c.get("label") or c.get("value")):
+                nameless.setdefault(c["type"], []).append(c.get("id", "?") + ("*" if c.get("selected") else ""))
+                continue
+            if shown >= max_controls:
+                continue
             r = {k: c[k] for k in ("id", "type", "name", "label", "value", "options", "checked", "selected", "expanded", "enabled", "depth") if k in c and c[k] not in (None, "", [])}
             if r.get("enabled") is True:
                 r.pop("enabled")
             ctrls.append(r)
-        if len(w.get("controls", [])) > max_controls:
-            ctrls.append({"note": f"{len(w['controls']) - max_controls} more controls not shown"})
+            shown += 1
+        for t, ids in nameless.items():
+            sel = [i.rstrip("*") for i in ids if i.endswith("*")]
+            ctrls.append({"note": f"{len(ids)} {t}s with no readable text ({ids[0].rstrip('*')} to {ids[-1].rstrip('*')})"
+                                  + (f"; selected: {', '.join(sel)}" if sel else "")
+                                  + ". Use c3d_dialog_image to see them, or select by keyboard: {\"tree_keys\": [path]}."})
+        named = [c for c in w.get("controls", []) if not (c.get("type") in ("TreeItem", "ListItem", "DataItem") and not (c.get("name") or c.get("label") or c.get("value")))]
+        if len(named) > max_controls:
+            ctrls.append({"note": f"{len(named) - max_controls} more controls not shown"})
         cw["controls"] = ctrls
         if w.get("unreadable"):
             cw["unreadable"] = w["unreadable"]

@@ -57,3 +57,42 @@ def parse(text: str):
             stack[-1].append(_atom(tok))
     top = stack[0]
     return top[0] if len(top) == 1 else top
+
+
+def paren_balance(expr: str) -> tuple[int, str | None]:
+    """Bracket depth of an AutoLISP expression, ignoring strings and ; comments.
+
+    Returns (depth, problem). depth 0 and problem None means it is safe to send.
+    An unbalanced expression sent to Civil 3D leaves the command line at a '((((_>'
+    continuation prompt; Civil 3D then refuses COM and the server stalls (20 Oct 2026,
+    20 Oct 2026). So it is checked here, before anything is sent.
+    """
+    depth = 0
+    i, n = 0, len(expr)
+    in_str = False
+    while i < n:
+        ch = expr[i]
+        if in_str:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == ";":
+            j = expr.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return depth, f"a ')' at character {i} closes more than was opened"
+        i += 1
+    if in_str:
+        return depth, "a string is not closed (odd number of double quotes)"
+    if depth > 0:
+        return depth, f"{depth} '(' not closed"
+    return 0, None

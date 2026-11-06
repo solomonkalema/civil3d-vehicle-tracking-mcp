@@ -44,7 +44,7 @@ def prepare_drawing(c3d: Civil3D) -> dict:
     """Settings the VT workflow needs: no dynamic input, metres, single COPY, Standard text in Arial.
 
     The Standard style matters: with the old 'txt' font the inserted vehicle profile's values overprinted
-    its labels (Hoima, 18 Oct 2026)."""
+    its labels (18 Oct 2026)."""
     c3d.set_var("DYNMODE", 0)
     c3d.set_var("INSUNITS", 6)
     c3d.set_var("COPYMODE", 1)
@@ -142,7 +142,7 @@ def _image_layers(c3d: Civil3D) -> set[str]:
 def isolate_for_pick(c3d: Civil3D, guide_layer: str | None) -> dict:
     """Make the guide line the only thing a pick can land on.
 
-    Live failures this prevents (Hoima, 18 Oct 2026): a pick on the guide where it crossed the attached A02
+    Live failures this prevents (18 Oct 2026): a pick on the guide where it crossed the attached A02
     image picked the image, and a pick where run 2's path overlapped the line picked the path; both times
     Follow ended silently with no path. Locks image and obstacle layers, turns off ATR* paths and the other
     guide layers. Returns what it changed so restore_layers can put it back."""
@@ -204,6 +204,15 @@ def _pick_on_guide(c3d: Civil3D, guide_handle: str) -> tuple[float, float]:
         if d > best:
             best, pos = d, ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
     return pos
+
+
+# Names that several libraries share; the default-vehicle question cannot tell them apart (20 Oct 2026:
+# 'P - Passenger Car' was the SANRAL 4.8 m car, not the AASHTO 2011 Metric 5.79 m car the TIA asked for).
+AMBIGUOUS_VEHICLE_NAMES = {
+    "p - passenger car": "SANRAL P 4.80 x 1.80 m; AASHTO 2011 (Metric) P 5.79 x 2.13 m",
+    "su - single unit": "SANRAL SU 9.10 x 2.50 m; AASHTO SU-9 9.15 x 2.44 m",
+    "p": "SANRAL P 4.80 m; AASHTO P 5.79 m",
+}
 
 
 def follow_run(
@@ -270,6 +279,11 @@ def follow_run(
         if not new:
             out["warning"] = ("No new Vehicle Tracking path was created: the pick missed the guide, the run was "
                               "cancelled, or Follow could not drive the line. See the run log.")
+        if vehicle and vehicle.strip().lower() in AMBIGUOUS_VEHICLE_NAMES:
+            out["vehicle_check"] = (
+                f"'{vehicle}' is a name several libraries use ({AMBIGUOUS_VEHICLE_NAMES[vehicle.strip().lower()]}). "
+                "The default-vehicle question only shows the name, so confirm the vehicle actually run from its "
+                "Insert Profile dimensions (vt_insert_profile) before reporting the run.")
         elif save:
             full = c3d._retry(lambda: c3d.doc().FullName) or ""
             if full:

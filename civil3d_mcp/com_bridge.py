@@ -37,9 +37,40 @@ except ImportError:  # lets the geometry tools and tests run elsewhere
     HAVE_COM = False
 
 RPC_RETRY = {-2147418111, -2147417846}  # CALL_REJECTED, SERVERCALL_RETRYLATER
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.9.0"
+PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+
+def disk_version() -> str | None:
+    """The version of the server code on disk, which is newer than the running one until the server restarts."""
+    try:
+        for line in PYPROJECT.read_text(encoding="utf-8-sig").splitlines():
+            if line.strip().startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"')
+    except Exception:
+        return None
+    return None
+
+
+def version_note() -> dict:
+    """{'restart_needed': ...} when the code on disk is not the code running (27 Oct 2026: v0.8.1 was on disk while
+    v0.8.0 ran, so its shared-folder guard and tools were missing and Claude worked round the server)."""
+    d = disk_version()
+    if d and d != SERVER_VERSION:
+        return {"code_on_disk": d, "restart_needed": (
+            f"The server running is v{SERVER_VERSION} but v{d} is installed. Ask the person to restart the civil3d "
+            "server (Claude app > Settings > Developer / Connectors, or restart the app) before relying on new tools.")}
+    return {}
+
+
+LISP_INLINE_MAX = 900  # characters; longer LISP goes through a temp .lsp file
+LOCK_WAIT_S = 45.0  # a tool call waits this long for the previous step before reporting busy
+STEP_MAX_S = 52.0  # and a step this long before reporting it is still running (bridge limit 60 s)
 WORK_DIR_NAME = "Claude outputs"
 WORK_TAG = "_claude"
+# Shared project folders Claude must never write into, each with the private staging folder that mirrors it
+# (v0.8.1). Other people sync and edit the shared folder, so a copy saved there is mistaken for real work.
+SHARED_ROOTS_FILE = Path(__file__).resolve().parent.parent / "shared_roots.json"
 
 CMDACTIVE_BITS = {
     1: "command",
@@ -53,11 +84,13 @@ CMDACTIVE_BITS = {
 
 
 class Civil3DError(RuntimeError):
-    pass
+    def __init__(self, msg: str = "", details: dict | None = None) -> None:
+        super().__init__(msg)
+        self.details = details or {}
 
 
 def attach_app():
-    """Attach to the running Civil 3D on the calling thread. Never starts a second instance."""
+    """Attach to the running Civil 3D on the calling thread. Starting one is c3d_launch's job (launcher.py)."""
     if not HAVE_COM:
         raise Civil3DError("pywin32 is not available. This tool only works on the Windows machine running Civil 3D.")
     app = None
@@ -70,7 +103,7 @@ def attach_app():
         except pywintypes.com_error:
             continue
     if app is None:
-        raise Civil3DError("No running Civil 3D found. Open Civil 3D and a drawing first.")
+        raise Civil3DError("No running Civil 3D found. Start one with c3d_launch(folder, name), or open Civil 3D yourself.")
     # Late binding so by-reference [out] VARIANTs behave the same with or without a makepy cache.
     return win32com.client.dynamic.Dispatch(app._oleobj_)
 
@@ -87,6 +120,9 @@ class _ComThread:
     def run(self, fn: Callable[..., Any], *a: Any, timeout: float = 600, **kw: Any) -> Any:
         return self._ex.submit(fn, *a, **kw).result(timeout=timeout)
 
+    def submit(self, fn: Callable[..., Any], *a: Any, **kw: Any) -> cf.Future:
+        return self._ex.submit(fn, *a, **kw)
+
 
 class Civil3D:
     """All methods are blocking and must be called through `call()` from async code."""
@@ -95,6 +131,7 @@ class Civil3D:
         self._thread = _ComThread()
         self._app = None
         self._lock = threading.Lock()
+        self._step: tuple[str, float] | None = None
         self.allow_original = False
         self._tmp = Path(tempfile.gettempdir()) / "civil3d_mcp"
         self._tmp.mkdir(exist_ok=True)
@@ -102,15 +139,101 @@ class Civil3D:
 
         self.runner = Runner(self)
         self.answers: dict | None = None  # answers for dialogs during the current tool call
+        self.last_blockers: list | None = None  # what the watchdog found during the last step
 
     # ------------------------------------------------------------------ plumbing
-    def call(self, fn: Callable[..., Any], *a: Any, **kw: Any) -> Any:
-        with self._lock:
-            return self._thread.run(fn, *a, **kw)
+    def call(self, fn: Callable[..., Any], *a: Any, lock_timeout: float = LOCK_WAIT_S, **kw: Any) -> Any:
+        """Run fn on the COM thread, one step at a time.
+
+        Every tool call must answer within the desktop bridge's 60 s, or the person sees the whole
+        server 'not responding' (20 Oct 2026). So the wait for the lock and the step itself
+        are both capped; a step that is still going reports itself as busy instead of hanging.
+        """
+        if not self._lock.acquire(timeout=lock_timeout):
+            raise Civil3DError(self.busy_note())
+        self._step = (getattr(fn, "__name__", "step"), time.time())
+        try:
+            return self._watched(self._thread.submit(fn, *a, **kw))
+        except cf.TimeoutError:
+            raise Civil3DError(
+                f"The step '{self._step[0]}' is still running in Civil 3D after {STEP_MAX_S:.0f} s. It carries on in the "
+                "background; check with c3d_status or c3d_run_status, and clear a stuck command with c3d_clear_command.",
+                {"blockers_seen": self.last_blockers} if self.last_blockers else None,
+            )
+        finally:
+            self._step = None
+            self._lock.release()
+
+    def _watched(self, fut: cf.Future) -> Any:
+        """Wait for a step, and every 5 s look for a pop-up holding Civil 3D (v0.7 watchdog).
+
+        Safe notices and plain OK notices are closed and Cancel is pressed where offered, then the step is given the
+        rest of its time. A pop-up that needs the person stops the wait at once and comes back in full. Vehicle
+        Tracking runs keep their own dialog handling (runner.py), so the watchdog stays out of an open run.
+        """
+        from . import watchdog
+
+        self.last_blockers = None
+        deadline = time.time() + STEP_MAX_S
+        while True:
+            try:
+                return fut.result(timeout=max(0.1, min(5.0, deadline - time.time())))
+            except cf.TimeoutError:
+                if time.time() >= deadline:
+                    raise
+            r = getattr(self, "runner", None)
+            if r is not None and r.active is not None and r.active.open:
+                continue
+            try:
+                quick = watchdog.blockers(getattr(self, "_hwnd", 0))
+            except Exception:
+                continue
+            if not quick["windows"]:
+                continue
+            rep = watchdog.handle("auto", getattr(self, "_hwnd", 0))
+            self.last_blockers = rep["blockers"]
+            waiting = [b for b in rep["blockers"] if b.get("needs")]
+            if waiting:
+                raise Civil3DError(
+                    "A pop-up in Civil 3D needs a decision before this step can finish (it is waiting behind it). "
+                    "It was not answered. See 'blockers'.", {"blockers": rep["blockers"]})
+
+    def busy_note(self) -> str:
+        step = getattr(self, "_step", None)
+        r = getattr(self, "runner", None)
+        run = r.active if r else None
+        parts = []
+        if step:
+            parts.append(f"busy with '{step[0]}' for {time.time() - step[1]:.0f} s")
+        if run is not None and run.open:
+            parts.append(f"run {run.id} ('{run.label}') is {run.state}")
+        return ("The server is " + "; ".join(parts) + ". Try again shortly, or use c3d_status (always answers) / "
+                "c3d_clear_command.") if parts else "The server is busy. Try again shortly."
+
+    def quick_status(self) -> dict:
+        """Status without touching COM or waiting for the lock: always answers."""
+        r = self.runner.active
+        step = getattr(self, "_step", None)
+        return {
+            "server_version": SERVER_VERSION,
+            **version_note(),
+            "busy": True,
+            "current_step": None if not step else {"name": step[0], "for_s": round(time.time() - step[1])},
+            "run": None if r is None else {"run_id": r.id, "label": r.label, "state": r.state,
+                                           "for_s": round(time.time() - r.started)},
+            "note": "Civil 3D is busy with the step above. c3d_clear_command sends Esc through the window "
+                    "without waiting for it; c3d_run_status reports dialogs.",
+        }
 
     def _dialog_open(self) -> bool:
         r = getattr(self, "runner", None)
-        return bool(r and r.active and r.active.state == "dialog")
+        if not (r and r.active and r.active.state == "dialog"):
+            return False
+        if not r._pending_alive(r.active):
+            # The dialog closed outside the server: do not keep refusing every call because of it.
+            r._dialog_gone(r.active)
+            return False
+        return True
 
     def _retry(self, fn: Callable[[], Any], timeout: float = 30.0) -> Any:
         if self._dialog_open():
@@ -149,6 +272,20 @@ class Civil3D:
         except Exception:
             self._hwnd = 0
         return self._hwnd
+
+    def escape_now(self) -> dict:
+        """Esc through the window with no COM and no lock: the way out when a step is stuck."""
+        from . import winput
+
+        h = getattr(self, "_hwnd", 0)
+        if not h:
+            return {"cleared": False, "error": "The Civil 3D window is not known yet (COM never answered this session)."}
+        winput.escape(h, 3)
+        r = self.runner.active
+        if r is not None and r.open and r.state != "dialog":
+            r.log("escape_now", note="Esc sent through the window while another step held the COM thread")
+        return {"sent_escape": True, "note": "Esc sent through the window. The stuck step should now return; "
+                                              "check with c3d_status in a few seconds."}
 
     def busy_reason(self) -> str:
         """Explain why Civil 3D is refusing COM, read through the window (works while COM is blocked)."""
@@ -261,6 +398,7 @@ class Civil3D:
             full = "(unsaved)"
         return {
             "server_version": SERVER_VERSION,
+            **version_note(),
             "run": run,
             "application": self._retry(lambda: app.Name),
             "version": self._retry(lambda: app.Version),
@@ -295,6 +433,10 @@ class Civil3D:
     def is_working_copy(path: str) -> bool:
         if not path:
             return False
+        if in_shared(path):
+            return False
+        if in_staging(path):
+            return True  # the private staging folder is Claude's own working area (v0.8.1)
         p = path.replace("\\", "/")
         if f"/{WORK_DIR_NAME}/" in p or Path(p).stem.endswith(WORK_TAG):
             return True
@@ -308,6 +450,7 @@ class Civil3D:
         full = self._retry(lambda: self.doc().FullName) or ""
         if not full:
             return  # unsaved new drawing, nothing to protect
+        refuse_shared(full, "change")  # even a '_claude' copy, if one was ever left in a shared folder
         if not self.is_working_copy(full):
             raise Civil3DError(
                 f"Refusing to change '{full}' because it is not a working copy. Call make_working_copy first "
@@ -329,6 +472,8 @@ class Civil3D:
         A never-saved drawing has no original to protect: it is saved straight into `folder` as `name`."""
         d = self.doc()
         src = self._retry(lambda: d.FullName)
+        if folder:
+            refuse_shared(folder, "save a working copy into")
         if not src:
             if not folder:
                 raise Civil3DError("This drawing has never been saved. Give `folder` (the job folder) and optionally `name`.")
@@ -338,10 +483,28 @@ class Civil3D:
             self._save_as_dwg(d, dst)
             self.activate()
             return {"original": None, "working_copy": str(dst), "note": "unsaved drawing saved straight into the folder"}
-        if self.is_working_copy(src):
+        if self.is_working_copy(src) and not in_shared(src):
             return {"working_copy": src, "note": "already a working copy"}
         srcp = Path(src)
-        out_dir = Path(folder) if folder else srcp.parent / WORK_DIR_NAME
+        note = None
+        staged = staging_for(srcp.parent)
+        if folder:
+            out_dir = Path(folder)
+        elif staged:
+            # Same relative place in the private staging folder, so relative xrefs still resolve there once the
+            # project tree has been copied across (the note says when it has not).
+            out_dir = staged
+            note = "saved to the private staging folder that mirrors the shared project; the person merges it after review"
+            missing = self._missing_relative_xrefs(d, staged)
+            if missing:
+                note += f". These relative xrefs are not in the staging copy yet: {missing[:5]}"
+        elif self._relative_xrefs(d):
+            # Production drawings load xrefs by relative path ('..\..\..\External References\...'). A copy one
+            # folder down would lose every one of them, so it goes beside the original instead.
+            out_dir = srcp.parent
+            note = "saved beside the original because the drawing loads xrefs by relative path"
+        else:
+            out_dir = srcp.parent / WORK_DIR_NAME
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = srcp.name.split(".")[0] if srcp.suffix.lower() != ".dwg" else srcp.stem
         dst = _unique(out_dir / f"{name and Path(name).stem or stem}{suffix}.dwg")
@@ -349,10 +512,39 @@ class Civil3D:
         # The original on disk is not written.
         self._save_as_dwg(d, dst)
         self.activate()
-        return {"original": src, "working_copy": str(dst)}
+        out = {"original": src, "working_copy": str(dst)}
+        if note:
+            out["note"] = note
+        return out
+
+    def _relative_xrefs(self, d) -> bool:
+        try:
+            blocks = self._retry(lambda: d.Blocks)
+            for i in range(blocks.Count):
+                b = blocks.Item(i)
+                if getattr(b, "IsXRef", False) and not os.path.isabs(getattr(b, "Path", "") or ""):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _missing_relative_xrefs(self, d, out_dir: Path) -> list[str]:
+        missing = []
+        try:
+            blocks = self._retry(lambda: d.Blocks)
+            for i in range(blocks.Count):
+                b = blocks.Item(i)
+                rel = getattr(b, "Path", "") or ""
+                if getattr(b, "IsXRef", False) and rel and not os.path.isabs(rel):
+                    if not (out_dir / rel).resolve().exists():
+                        missing.append(rel)
+        except Exception:
+            pass
+        return missing
 
     def new_drawing(self, folder: str, name: str, template: str | None = None) -> dict:
         """Start a new metric drawing, save it into `folder` as `name`.dwg and make it the active working copy."""
+        refuse_shared(folder, "create a drawing in")
         app = self.app()
         docs = self._retry(lambda: app.Documents)
         d = self._retry(lambda: docs.Add(template) if template else docs.Add(), timeout=60)
@@ -387,7 +579,7 @@ class Civil3D:
         docs = self._retry(lambda: app.Documents)
         for i in range(self._retry(lambda: docs.Count)):
             d = docs.Item(i)
-            if os.path.normcase(d.FullName) == os.path.normcase(path):
+            if os.path.normcase(getattr(d, "FullName", "") or "") == os.path.normcase(path):  # half-open docs lack it
                 self._retry(lambda: d.Activate())
                 return {"drawing": path, "note": "already open, activated"}
         self._retry(lambda: docs.Open(path, read_only), timeout=120)
@@ -476,6 +668,12 @@ class Civil3D:
         The result is written to a temp file by LISP, so quotes and long values
         come back intact (no command-line echo parsing).
         """
+        from .lispdata import paren_balance
+
+        _, problem = paren_balance(expr)
+        if problem:
+            return {"ok": False, "error": f"Not sent: the expression is incomplete ({problem}). An incomplete expression "
+                                          "leaves Civil 3D at a '(_>' prompt and blocks every later call."}
         out = self._tmp / f"lisp_{int(time.time() * 1000)}.txt"
         if out.exists():
             out.unlink()
@@ -489,6 +687,12 @@ class Civil3D:
             "   (write-line (vl-prin1-to-string mcp:r) mcp:f))"
             " (close mcp:f) (princ))"
         )
+        if len(wrapped) > LISP_INLINE_MAX:
+            # Long text sent through SendCommand is cut off (20 Oct 2026: a 5 kB expression arrived as '((((_>').
+            # Write it to a file and send only a short (load ...) instead.
+            lsp = self._tmp / f"lisp_{int(time.time() * 1000)}.lsp"
+            lsp.write_text(wrapped + "\n", encoding="utf-8")
+            wrapped = f'(load "{str(lsp).replace(chr(92), "/")}")'
         state = self.send(wrapped, wait=True, timeout=timeout)
         end = time.time() + 5
         while not out.exists() and time.time() < end:
@@ -677,11 +881,62 @@ def _unique(dst: Path) -> Path:
     return dst
 
 
+def _shared_roots() -> list[tuple[str, Path]]:
+    """[(normcased shared root, staging root)], longest first. Read on every call so edits apply at once."""
+    import json
+
+    try:
+        cfg = json.loads(SHARED_ROOTS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for entry in cfg.get("roots", []):
+        staging = Path(entry["staging"])
+        for shared in entry.get("shared", []):
+            out.append((os.path.normcase(os.path.abspath(shared)).rstrip("\\/"), staging))
+    return sorted(out, key=lambda r: -len(r[0]))
+
+
+def in_shared(path: str | Path) -> bool:
+    return staging_for(path) is not None
+
+
+def in_staging(path: str | Path) -> bool:
+    p = os.path.normcase(os.path.abspath(str(path)))
+    for _, staging in _shared_roots():
+        root = os.path.normcase(os.path.abspath(str(staging))).rstrip("\\/")
+        if p == root or p.startswith(root + os.sep):
+            return True
+    return False
+
+
+def staging_for(path: str | Path) -> Path | None:
+    """The private staging path that mirrors `path`, or None when `path` is not in a shared folder."""
+    p = os.path.normcase(os.path.abspath(str(path)))
+    for root, staging in _shared_roots():
+        if p == root or p.startswith(root + os.sep):
+            rel = os.path.abspath(str(path))[len(root):].lstrip("\\/")
+            return staging / rel if rel else staging
+    return None
+
+
+def refuse_shared(path: str | Path, what: str = "write") -> None:
+    if in_shared(path):
+        raise Civil3DError(
+            f"Refusing to {what} '{path}': it is in a shared project folder other people sync and edit. "
+            f"Work goes to the private staging folder instead ({staging_for(path)}); the person reviews it and "
+            f"merges it themselves. Folders are listed in {SHARED_ROOTS_FILE}."
+        )
+
+
 def copy_file_to_working(src: str) -> str:
-    """Copy a drawing on disk into its Claude outputs folder without opening it."""
+    """Copy a drawing on disk into its Claude outputs folder without opening it.
+
+    A drawing in a shared folder is copied to the same relative place in its staging folder instead."""
     s = Path(src)
-    out = s.parent / WORK_DIR_NAME
-    out.mkdir(exist_ok=True)
+    staged = staging_for(s.parent)
+    out = staged if staged else s.parent / WORK_DIR_NAME
+    out.mkdir(parents=True, exist_ok=True)
     dst = out / f"{s.stem}{WORK_TAG}{s.suffix}"
     n = 2
     while dst.exists():

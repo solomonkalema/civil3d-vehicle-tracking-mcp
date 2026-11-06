@@ -65,6 +65,10 @@ def inventory(c3d: Civil3D) -> dict:
             " mcp:n (cons (if (vl-catch-all-error-p mcp:v) (cdr (assoc 5 (entget mcp:e))) mcp:v) mcp:n))))"
             " (list (if mcp:ss (sslength mcp:ss) 0) (reverse mcp:n)))"
         )
+        if key == "points":
+            # COGO points have no names worth listing; a survey drawing returned 200 empty strings
+            out[key] = {"count": count}
+            continue
         out[key] = {"count": count, "names": names or []}
     out["aecc_api_version"] = _cache.get("version", "not probed yet")
     return out

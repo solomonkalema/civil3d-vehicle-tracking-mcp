@@ -2,8 +2,8 @@
 
 Why this exists: while Vehicle Tracking (or any command) waits at a command-line
 prompt such as "select object to Follow", Civil 3D rejects every COM call, so a
-pick point sent with SendCommand never arrives (Hoima job, 18 Oct 2026: every
-Follow run needed Solomon to click the guide line by hand). The same happens
+pick point sent with SendCommand never arrives (a swept-path job, 18 Oct 2026: every
+Follow run needed the person to click the guide line by hand). The same happens
 while PAN or another live command is running.
 
 AutoCAD accepts typed input through the WM_COPYDATA window message: text sent
@@ -161,5 +161,18 @@ def looks_like_prompt(lines: list[str], patterns: list[str] | None = None) -> st
     pats = [re.compile(p, re.I) for p in (patterns or PROMPT_PATTERNS)]
     for line in reversed(lines[-3:]):
         if any(p.search(line) for p in pats):
+            return line
+    return None
+
+
+# A LISP expression that was cut off or left a bracket open puts the command line at a continuation
+# prompt such as '((((_>' (one '(' per open level). Civil 3D then refuses COM until Esc.
+LISP_CONTINUATION = re.compile(r"^\s*\(*_>\s*$|^\s*\(+_?>\s*$")
+
+
+def lisp_continuation(lines: list[str]) -> str | None:
+    """The continuation prompt if the command line is stuck in an unfinished LISP expression."""
+    for line in reversed(lines[-2:]):
+        if LISP_CONTINUATION.match(line or ""):
             return line
     return None

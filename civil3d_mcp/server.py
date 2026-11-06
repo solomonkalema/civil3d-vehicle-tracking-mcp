@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -23,26 +24,80 @@ except ImportError:  # SDK 1.x
 
 from shapely.geometry import MultiPolygon, Point, Polygon
 
+from . import circulation as circ
 from . import civil as civ
 from . import dwg
 from . import geometry as geo
+from . import production as prod
+from . import roads
 from . import section as sec
 from . import vt
 from .catalogue import HOME
 from .com_bridge import Civil3D, Civil3DError
+from .launcher import Launcher
+from . import watchdog
 from .dialogs import DialogError
 from .runner import DialogPending
 from .vehicles import Vehicle, all_vehicles, get_vehicle, save_user_vehicle
 
 INSTRUCTIONS = """
-Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.4.
+Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.9.0.
+
+Road design production (v0.8, data-shortcut road projects):
+- Read before changing anything: road_shortcut_project(folder) for the project on disk, then road_report_file(path)
+  per drawing (source alignment -> corridor -> PnP -> CS). 'needs_sync' lists stale or broken data references.
+- road_sheets reads each sheet's plot set-up, viewport scale (paper mm per metre) and title-block attributes;
+  c3d_pdf_page shows an issued PDF sheet. Compare the drawn scale with the title block's stated scale.
+- Never write into a shared project folder (listed in shared_roots.json, e.g. a project folder shared with colleagues).
+  c3d_make_working_copy puts copies of drawings there at the same relative path in the private staging folder,
+  which holds a copy of the project tree so relative xrefs still load. The person reviews and merges them.
+  Saves, new drawings and copies into a shared folder are refused (v0.8.1).
+- A working copy of a SOURCE drawing (alignment, corridor) is not what the sheets reference: geometry changes reach
+  the sheets only after the edited source replaces the original and references are synchronised. Agree that
+  promote step with the person before editing geometry. Section 11 of c3d_knowledge has the project map.
+- Large corridor drawings take 30-60 s to open; Civil 3D refuses COM calls meanwhile ('call rejected'). Retry.
+
+Road production steps (v0.9, from a road pilot of 27 Oct 2026). Use these tools, not hand-written LISP or
+outside scripts, so the working-copy and shared-folder guards always apply:
+- task_preflight('road_production') first, and ask its questions once (which road, staging copy, promote step
+  agreed, title-block values by the client's initials rule, plot style, output folder).
+- Order per road, each on the staging copy: corridor drawing -> road_sync_references -> road_rebuild_corridors
+  -> c3d_save; then each sheet drawing (PnP, CS) -> road_sync_references -> road_set_titleblock -> c3d_save ->
+  road_plot_sheets(folder) -> look at every PDF with c3d_pdf_page next to the issued sheet before calling it done.
+- road_sync_references may stop at 'Object Name Change' (a source object was renamed). It is the person's call
+  when the source is someone else's work: quote it, answer with c3d_blockers(click=..., reason=...).
+- road_plot_sheets checks the plot style is installed, REGENALLs first (profile lines were missing without it),
+  plots one -PLOT per layout with BACKGROUNDPLOT 0, never over a file a PDF viewer holds open (it picks 'v2'),
+  and returns 'left' when the rest won't fit in one call. Plot Progress windows are waited out, never cancelled.
+- road_quantities reads cut/fill and every material from the sample lines' material sections (average end area),
+  matching the Total Volume Table within 0.3% without adding or exploding a table. road_stakeout and
+  road_setout_data write the stake-out table and curve/PVI data (CSV/JSON into staging).
+- c3d_quit_civil3d restarts cleanly between batches (refuses while anything is unsaved); never close data-shortcut
+  drawings one by one. c3d_focus brings Civil 3D to the front for computer use: never open Civil 3D from computer
+  use (open_application started a second Civil 3D on 27 Oct).
+- c3d_status says 'restart_needed' when newer server code is installed than is running: tell the person, and
+  don't work round the missing tools with scripts in the meantime.
 
 Ground rules:
 - Never edit the user's original drawing. Call c3d_make_working_copy first; drawing-changing tools refuse otherwise.
 - Never send an empty command (Enter repeats the last command). c3d_command refuses it.
-- Attach to the running Civil 3D only; never start a second instance.
+- Never start a second Civil 3D. If none is running, c3d_launch(folder, name) starts Civil 3D 2027 Metric and
+  saves a fresh working drawing there. Starting takes 1-3 minutes in the background: call c3d_launch again
+  until launch_state is 'ready' and new_drawing is filled. If Civil 3D is already open it just makes the drawing.
 - After each successful step that changes the drawing, save, so finished work is never lost.
 - Units are metres (INSUNITS 6). Traffic drives on the left in Uganda.
+
+Pop-ups Claude cannot see (v0.7). Some Civil 3D 2027 dialogs are WebView2 windows that never appear in computer-use
+screenshots. The server sees them, so never rely on a screenshot to say "no dialog":
+- Every step is watched: a pop-up holding Civil 3D is read and, by one rule set, safe notices and plain OK notices
+  are closed and Cancel is pressed where offered (logged with a picture in run_logs/watchdog.jsonl). Anything that
+  mentions saving, overwriting, deleting, licences, sign-in etc., or doesn't fit, is never answered: the step
+  returns 'blockers' with the full text and buttons.
+- On such a blocker: quote it to the person. If they may be away, stop the task there and send them a push
+  notification quoting the dialog. Answer only on their word, with c3d_blockers(click=..., hwnd=..., reason=...).
+- A step or status that is busy for no visible reason: c3d_blockers() to read everything holding Civil 3D, and
+  c3d_screen() for a picture of the Civil 3D window as it really is on the monitor.
+- A sweeper closes catalogued notices (watchdog.SAFE_NOTICES, e.g. 'Drawing Recovery' after a crash) all the time.
 
 Pop-ups (dialogs) are part of the work, not something to avoid:
 - Every command runs through a dialog watcher. No screen access is needed.
@@ -54,7 +109,12 @@ Pop-ups (dialogs) are part of the work, not something to avoid:
 - On the first live sighting of a dialog, pass learn={...} to c3d_dialog_act so the catalogue records it.
 - Before a task, call task_preflight(workflow) and ask its questions once, together. Pass the answers to the
   run tool so known dialogs need no round trip.
-- A run that is still going returns 'running': continue with c3d_run_status. Tool calls never block > 40 s.
+- A run that is still going returns 'running': continue with c3d_run_status. Tool calls never block > 40 s,
+  and c3d_status always answers within seconds, reporting the step that is busy (v0.5).
+- A dialog closed by the person or by Civil 3D is forgotten automatically and the run carries on; 'Please Wait'
+  splashes are waited out, not reported. If the state still looks wrong: c3d_run_cancel(force=True).
+- Stuck command line (PAN, a prompt, an unfinished LISP '(_>'): c3d_clear_command, which works even while
+  another step holds the server.
 - c3d_knowledge has the best-practice notes (Vehicle Tracking settings, AutoCAD variables, what to ask).
 
 Swept paths, two routes:
@@ -68,7 +128,9 @@ Report clearances against 0.3 m. Report anything that only just fits, and any sp
 Swept-path task flow (v0.3; the person should never need to touch Civil 3D):
 1. c3d_new_drawing(job folder, name) or c3d_make_working_copy(folder=job folder). Outputs go in the job folder.
 2. vt_prepare_drawing, then vt_attach_pdf_page (or vt_attach_image) and check one dimensioned line.
-3. Obstacles as closed polylines on SP-OBS-* layers; sp_parked_vehicles for occupied bays.
+3. Obstacles as polylines on OBS-*/SP-OBS-* layers; sp_parked_vehicles for occupied bays. Many lines at once
+   (walls and columns traced from the PDF): c3d_draw_polylines or c3d_import_dxf, one call. Never paste
+   long LISP: c3d_lisp refuses unbalanced brackets and sends anything long through a file.
 4. Design vehicles come from the TIA (its design-vehicle table), never chosen here. A single-vehicle run is not
    acceptable: run the standard DV-1 car AND every other design vehicle the TIA names. Find each one's
    library path with vt_vehicle_library.
@@ -89,6 +151,13 @@ Swept-path task flow (v0.3; the person should never need to touch Civil 3D):
    directions. Floor and soffit come from the architect's section (trace it at true scale after
    vt_attach_pdf_page) or from a Civil 3D profile. Use the Vehicle Tracking profile's 'Min Body Ground
    Clearance' and 'Overall Body Height' for the vehicle; say so when an indicative value is used.
+   Vehicle check: names such as 'P - Passenger Car' exist in several libraries (SANRAL 4.8 m, AASHTO 5.79 m), and
+   the default-vehicle question shows only the name. Confirm the vehicle from its inserted profile. The Library
+   Explorer's tree has no readable names: the server selects by keyboard type-ahead ({"tree_keys": path});
+   check the result with c3d_dialog_image before Proceed. Simplest: have the person Make Default the TIA's
+   car once, then every run answers Yes and the library never opens.
+6b. Circulation arrows on every swept-path sheet: vt_circulation_arrows(kind='ingress'|'egress', guide_handle,
+   stage_number=n) after each run - green for ingress, red for egress - carried into every figure.
 7. Figures with c3d_export_png (the person's view is restored afterwards).
 Never delete a good path to fix something cosmetic; fix it in place or note it. If Civil 3D is stuck in a
 command (PAN, a prompt), c3d_clear_command cancels it from here: do not ask the person to press Esc.
@@ -96,6 +165,8 @@ command (PAN, a prompt), c3d_clear_command cancels it from here: do not ask the 
 
 mcp = _Server("civil3d", instructions=INSTRUCTIONS)
 C = Civil3D()
+L = Launcher(C)
+watchdog.start_sweeper()
 
 
 async def run(fn, *a, answers: dict | None = None, **kw) -> Any:
@@ -121,7 +192,9 @@ async def run(fn, *a, answers: dict | None = None, **kw) -> Any:
             payload["interrupted_step"] = f"{type(e).__name__}: {e}"
             return payload
         if isinstance(e, (Civil3DError, DialogError)):
-            return {"error": str(e)}
+            out = {"error": str(e)}
+            out.update(getattr(e, "details", None) or {})
+            return out
         return {"error": f"{type(e).__name__}: {e}"}
 
 
@@ -138,8 +211,97 @@ def _pts(pts) -> list[list[float]]:
 # =============================================================================
 @mcp.tool()
 async def c3d_status() -> dict:
-    """Connection check: Civil 3D version, active drawing, whether it is a working copy, command state."""
-    return await run(C.status)
+    """Connection check: Civil 3D version, active drawing, whether it is a working copy, command state.
+    Always answers within a few seconds: if another step is still running it reports that step instead."""
+    try:
+        out = await asyncio.to_thread(C.call, C.status, lock_timeout=3)
+    except Civil3DError:
+        out = C.quick_status()
+    except Exception as e:
+        out = C.quick_status()
+        out["error"] = f"{type(e).__name__}: {e}"
+    if L.state != "idle" or "No running Civil 3D" in str(out.get("reason", "")):
+        out["launch"] = L.report()
+    if out.get("busy"):
+        try:
+            b = await asyncio.to_thread(watchdog.blockers, getattr(C, "_hwnd", 0))
+            if b["windows"]:
+                out["blockers"] = [w["title"] or "(untitled)" for w in b["windows"]]
+                out["modal"] = b["modal"]
+                out["next"] = "Something is holding Civil 3D: c3d_blockers() reads it in full, c3d_screen() shows it."
+        except Exception:
+            pass
+    return out
+
+
+@mcp.tool()
+async def c3d_blockers(act: str = "none", hwnd: int | None = None, click: str | None = None, reason: str = "") -> dict:
+    """Every pop-up holding Civil 3D, read in full (title, text, buttons, inputs) and classed as safe_notice,
+    notice, cancelable, protected or unknown - including WebView2 dialogs that screenshots can't see.
+    act='safe' closes catalogued and plain OK notices; act='auto' also presses Cancel where offered.
+    Protected and unknown pop-ups are never answered by act: answer one only on the person's word, with
+    hwnd=<from this list>, click=<button name, or 'WM_CLOSE' for its X> and the reason."""
+    try:
+        if hwnd is not None and click:
+            if not reason:
+                return {"error": "Give the reason (whose decision, what was asked) for the log."}
+            return await asyncio.to_thread(watchdog.click, int(hwnd), click, reason)
+        if act not in ("none", "safe", "auto"):
+            return {"error": "act is 'none', 'safe' or 'auto'."}
+        return await asyncio.to_thread(watchdog.handle, act, getattr(C, "_hwnd", 0))
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def c3d_screen():
+    """Picture of the Civil 3D window as it is on the monitor, pop-ups included (also those computer-use
+    screenshots miss), with other programs cropped away. Uses no COM, so it works while Civil 3D is blocked."""
+    import datetime as _dt
+
+    out = watchdog.LOG_DIR / "screens" / f"{_dt.datetime.now():%Y%m%d-%H%M%S}.png"
+    try:
+        info = await asyncio.to_thread(watchdog.screen, out)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    return [_Image(path=info["path"]), f"modal: {info['modal']}; pop-ups: {info['blockers'] or 'none'}"]
+
+
+def _not_running(st: dict) -> bool:
+    return "No running Civil 3D" in str(st.get("reason", ""))
+
+
+@mcp.tool()
+async def c3d_launch(folder: str | None = None, name: str | None = None, template: str | None = None,
+                     wait_s: float = 40, end_hidden: bool = False) -> dict:
+    """Open a fresh Civil 3D session. Starts Civil 3D 2027 Metric from its Start-menu shortcut if none is running
+    (never a second one) and, given folder and name, saves a new working drawing <folder>/<name>.dwg (metres,
+    dynamic input off, Arial), as c3d_new_drawing does. Starting takes 1-3 minutes and runs in the background:
+    each call waits up to wait_s (max 45) and reports launch_state (starting / ready / failed). Call again until
+    it is 'ready' and new_drawing is filled. If Civil 3D is already open, it just makes the drawing.
+    launch_state 'blocked' means a hidden acad.exe left from an earlier session is in the way: ask the person,
+    then call again with end_hidden=True to end it (only if it has no window) and start Civil 3D."""
+    wait_s = max(0.0, min(float(wait_s), 45.0))
+    req = {"folder": folder, "name": name, "template": template} if folder and name else None
+    if L.state == "starting" or (L.state == "ready" and L.request and L.drawing is None):
+        if req and not L.request:
+            L.request = req
+        return await asyncio.to_thread(L.wait, wait_s)
+    if L.state == "ready" and L.request and req and L.request["folder"] == folder and L.request["name"] == name:
+        return L.report()  # this drawing was already made by the launch; report it rather than make a second
+    try:
+        st = await asyncio.to_thread(C.call, C.status, lock_timeout=5)
+    except Exception as e:
+        st = {"reason": str(e)}
+    if not _not_running(st):
+        out = {"launch_state": "already_running", "civil3d": st}
+        if req:
+            out["new_drawing"] = await run(C.new_drawing, folder, name, template)
+        else:
+            out["next"] = "Civil 3D is already open. Start the working drawing with c3d_new_drawing(folder, name)."
+        return out
+    await asyncio.to_thread(L.start, folder, name, template, end_hidden)
+    return await asyncio.to_thread(L.wait, wait_s)
 
 
 @mcp.tool()
@@ -161,7 +323,12 @@ async def c3d_new_drawing(folder: str, name: str, template: str | None = None) -
 async def c3d_clear_command() -> dict:
     """Cancel whatever command is running in Civil 3D (PAN, a waiting prompt, a half-finished command) by
     sending Esc through the window. Works while Civil 3D refuses COM calls, so the person never has to."""
-    return await run(C.clear_command)
+    try:
+        return await asyncio.to_thread(C.call, C.clear_command, lock_timeout=3)
+    except Civil3DError:
+        # Another step holds the COM thread (often the very command that is stuck): send Esc straight
+        # through the window without waiting for it.
+        return await asyncio.to_thread(C.escape_now)
 
 
 @mcp.tool()
@@ -266,9 +433,10 @@ async def c3d_run_input(text: str, wait_s: float = 25) -> dict:
 
 
 @mcp.tool()
-async def c3d_run_cancel() -> dict:
-    """Cancel a run waiting at a command-line prompt (sends Esc twice). A waiting dialog must be answered instead."""
-    return await run(C.runner.cancel)
+async def c3d_run_cancel(force: bool = False) -> dict:
+    """Cancel the current run (sends Esc twice through the window). A dialog that has already closed is forgotten.
+    A dialog that is still open must be answered with c3d_dialog_act, unless force=True (Esc on the dialog too)."""
+    return await run(C.runner.cancel, force)
 
 
 @mcp.tool()
@@ -305,7 +473,11 @@ async def c3d_knowledge() -> str:
     """Best-practice notes for this server: Vehicle Tracking settings, AutoCAD dialog variables, observed behaviour,
     and what to ask before a task. Read once per task."""
     f = HOME / "knowledge.md"
-    return f.read_text(encoding="utf-8") if f.exists() else "knowledge.md not found beside the catalogue."
+    text = f.read_text(encoding="utf-8") if f.exists() else "knowledge.md not found beside the catalogue."
+    local = HOME / "knowledge.local.md"  # project-specific notes, kept out of the public repository
+    if local.exists():
+        text += "\n\n" + local.read_text(encoding="utf-8")
+    return text
 
 
 @mcp.tool()
@@ -466,6 +638,172 @@ async def civil_surface_elevation(surface: str, points: list[list[float]]) -> di
 async def civil_alignment_from_polyline(polyline_handle: str, name: str, layer: str = "C-ROAD-ALIGN") -> dict:
     """Create a siteless alignment from a polyline with default styles."""
     return await run(civ.alignment_from_polyline, C, polyline_handle, name, layer)
+
+
+# =============================================================================
+# ROAD DESIGN PRODUCTION (v0.8): read how a data-shortcut road project is built
+# =============================================================================
+@mcp.tool()
+async def road_drawing_report(parts: list[str] | None = None, detail: bool = True) -> dict:
+    """How the active drawing is built, read-only. parts (default all): 'alignments' (data-reference state
+    own/ref/stale/BROKEN, profiles, profile views, sample line groups with spacing and section views),
+    'surfaces', 'corridors' (baselines, regions, assemblies, station counts), 'xrefs' (and whether found),
+    'layouts' (plotter, ctb, paper, viewport scales, title-block attributes), 'types' (model-space counts).
+    'needs_sync' lists data references that are stale or broken."""
+    return await run(roads.drawing_report, C, parts, detail)
+
+
+@mcp.tool()
+async def road_report_file(path: str, parts: list[str] | None = None, detail: bool = True) -> dict:
+    """Open a drawing read-only (unless it is already open) and report how it is built (as road_drawing_report).
+    The drawing stays open: don't close it over COM (that crashed Civil 3D); restart Civil 3D between batches.
+    One drawing at a time; a large corridor drawing can take 30-60 s to open."""
+    return await run(roads.report_file, C, path, parts, detail)
+
+
+@mcp.tool()
+async def c3d_close_drawing(path: str, force: bool = False) -> dict:
+    """Close an open drawing without saving. COM closes of data-shortcut drawings crashed Civil 3D four times,
+    so without force=True this declines and explains: leave such drawings open and restart Civil 3D between
+    batches. force=True only for a plain drawing with no data references or xrefs."""
+    return await run(roads.close_drawing, C, path, force)
+
+
+@mcp.tool()
+async def road_sheets(attributes: bool = True) -> list | dict:
+    """Every sheet (paper-space layout) of the active drawing: plotter, plot style, paper, viewport scales
+    (paper mm per drawing metre and the scale that gives) and title-block attributes with the block handle."""
+    return await run(lambda: roads.layouts(C.doc(), attributes))
+
+
+@mcp.tool()
+async def road_shortcut_project(folder: str) -> dict:
+    """Read a Civil 3D data-shortcut project from disk (no Civil 3D needed): every shortcut by type, the source
+    drawing each points to, how many shortcuts each source drawing publishes, and any source that is missing."""
+    try:
+        return await asyncio.to_thread(roads.shortcut_project, folder)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def c3d_pdf_page(pdf: str, page: int = 1, dpi: int = 60):
+    """Look at one page of a PDF, e.g. an issued drawing sheet, as an image. Raise dpi to read small text."""
+    try:
+        path = await asyncio.to_thread(roads.pdf_page_png, pdf, page, dpi)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+    return [_Image(path=path), path]
+
+
+# =============================================================================
+# ROAD PRODUCTION (v0.9): sync, rebuild, title blocks, plot, quantities, set-out
+# =============================================================================
+@mcp.tool()
+async def road_sync_references() -> dict:
+    """Synchronise every data reference in the active working drawing (staging copy), with the stale list before
+    and after. A renamed source raises 'Object Name Change': that comes back for the person to decide."""
+    return await run(prod.sync_references, C)
+
+
+@mcp.tool()
+async def road_rebuild_corridors(names: list[str] | None = None, only_out_of_date: bool = False) -> dict:
+    """Rebuild corridors in the active working drawing (all, or `names`), one at a time, reporting OutOfDate
+    before and after. Those that don't fit in this call come back in 'left'. Save afterwards with c3d_save."""
+    return await run(prod.rebuild_corridors, C, names, only_out_of_date)
+
+
+@mcp.tool()
+async def road_set_titleblock(values: dict[str, str], layouts: list[str] | None = None, block: str | None = None,
+                              save: bool = True) -> dict:
+    """Set title-block attributes by tag, e.g. {'DESIGNED': 'AB', 'CHECKED': 'CD', 'DRAWN': 'EF', 'DATE': 'Oct-26',
+    'REV.': '01'}, on every layout or the named ones. Only those tags change; the old and new values are returned.
+    block: block name or wildcard (default any block carrying the tags). Working copies only; saves by default.
+    Take the values from the client's initials rule (who designs, checks, approves and draws each discipline),
+    never guessed."""
+    def f():
+        out = prod.set_titleblock(C, values, layouts, block)
+        if save and out["count"]:
+            out["saved"] = C.qsave()
+        return out
+
+    return await run(f)
+
+
+@mcp.tool()
+async def road_plot_sheets(folder: str | None = None, layouts: list[str] | None = None, names: list[str] | None = None,
+                           regen: bool = True, overwrite: bool = False, allow_missing_ctb: bool = False,
+                           install_ctb: str | None = None, check_only: bool = False) -> dict:
+    """Plot layouts of the active drawing to PDF in `folder` (never a shared project folder), each with its own
+    page set-up: all layouts in tab order, or `layouts` in the order given, named after the layout or `names`.
+    check_only=True: just report each layout's device, paper and plot style, and whether the style is installed.
+    install_ctb=<path to a .ctb>: copy a plot style into Civil 3D's plot-style folder first (a missing one plots
+    in object colours without warning). A file that exists or is open in a PDF viewer is not overwritten: the sheet
+    is plotted as '<name> v2.pdf'. Sheets that don't fit in one call come back in 'left'."""
+    def f():
+        out = {}
+        if install_ctb:
+            out["install_ctb"] = prod.install_ctb(C, install_ctb)
+        if check_only:
+            out.update(prod.plot_check(C, layouts))
+            return out
+        if not folder:
+            raise Civil3DError("Give the output folder (in the staging folder, at the path the sheets belong).")
+        out.update(prod.plot_layouts(C, folder, layouts, names, regen, overwrite, allow_missing_ctb))
+        return out
+
+    return await run(f)
+
+
+@mcp.tool()
+async def road_quantities(alignment: str, group: str | None = None, earthworks: str = "Earthworks",
+                          ground: str | None = None, out_csv: str | None = None, detail: bool = False) -> dict:
+    """Cut, fill and every material's volume (m3, average end area) for an alignment's sample line group, read from
+    the material sections on each sample line. Read-only: needs Compute Materials to have been run. `ground` is
+    part of the existing-ground section's name (default: the first surface section that isn't Top/Datum).
+    out_csv writes the per-station areas (staging only); detail=True also returns them."""
+    return await run(prod.quantities, C, alignment, group, earthworks, ground, out_csv, detail)
+
+
+@mcp.tool()
+async def road_stakeout(alignment: str, interval: float = 10.0, surface: str | None = None,
+                        targets: dict[str, str] | None = None, out_csv: str | None = None) -> dict:
+    """Stake-out table for a road: centre line and each target alignment (default every '<alignment>-...' one:
+    edges, walkways, drains) at `interval` m and at the exact end station, with offset, E, N and level from
+    `surface` (default '<alignment> Corridor - Top'). out_csv writes the full table (staging only)."""
+    return await run(prod.stakeout, C, alignment, interval, surface, targets, out_csv)
+
+
+@mcp.tool()
+async def road_setout_data(alignment: str, profiles: list[str] | None = None, out_json: str | None = None) -> dict:
+    """Setting-out data: every horizontal element of the alignment (type, stations, radius, PI and centre
+    coordinates, tangent, external) and the PVIs of its design profiles (station, level, grades, curve length,
+    K). out_json writes it (staging only)."""
+    def f():
+        out = prod.setout_data(C, alignment, profiles)
+        if out_json:
+            out = {"written": prod.write_json(out_json, out), "horizontal_elements": len(out["horizontal"]),
+                   "profiles": {k: len(v) for k, v in out["profiles"].items()}}
+        return out
+
+    return await run(f)
+
+
+@mcp.tool()
+async def c3d_quit_civil3d(confirm: bool = False) -> dict:
+    """Quit Civil 3D cleanly, to restart it between batches of heavy drawings. Refuses while any open drawing has
+    unsaved changes. Without confirm=True it only lists what is open. Restart with c3d_launch."""
+    return await run(prod.quit_civil3d, C, confirm)
+
+
+@mcp.tool()
+async def c3d_focus() -> dict:
+    """Bring the running Civil 3D window to the front, e.g. before computer-use clicks. Never start or open
+    Civil 3D from computer use: that launches a second copy."""
+    try:
+        return await asyncio.to_thread(prod.focus_window)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 # =============================================================================
@@ -905,7 +1243,8 @@ async def vt_attach_pdf_page(
             try:
                 import fitz  # type: ignore
             except ImportError:
-                raise Civil3DError("PyMuPDF is not installed for the server's Python: run 'pip install pymupdf' and restart the server.")
+                raise Civil3DError(f"PyMuPDF is not installed for the server's Python. Run: \"{sys.executable}\" -m pip install pymupdf  "
+                                  "then restart Claude Desktop. Meanwhile render the page elsewhere and use vt_attach_image.")
         from PIL import Image
 
         doc = fitz.open(pdf)
@@ -1023,6 +1362,108 @@ async def vt_check_path(path_handle: str, obstacle_layers: str, required_clearan
     def f():
         obs = dwg.read_layers(C, obstacle_layers)
         return vt.check_vt_path(C, path_handle, obs, required_clearance_m)
+
+    return await run(f)
+
+
+def _draw_forms(forms: list[str]) -> int:
+    """Send entmake forms to Civil 3D in a few (load ...) batches. Runs on the COM thread."""
+    made = 0
+    for expr in circ.batch(forms):
+        res = C.lisp(expr, 40)
+        if not res.get("ok"):
+            raise Civil3DError(f"Drawing batch failed: {res.get('error') or res.get('hint')}")
+        try:
+            made += int(float(res["result"]))
+        except Exception:
+            pass
+    return made
+
+
+@mcp.tool()
+async def c3d_draw_polylines(polylines: list[dict]) -> dict:
+    """Draw many polylines in one go: [{"points": [[x, y], ...], "layer": "OBS-GROUND", "color": 8, "closed": false}, ...].
+    Built as entmake data and loaded from a file in a few batches, so hundreds of walls, columns or bay lines
+    go in with one call (pasting them through LISP or one COM call each is what stalled the server on a TIA job).
+    Layers are created if missing (colour from the first polyline on each layer)."""
+    def f():
+        C.guard_write()
+        forms, layers = [], {}
+        for pl in polylines:
+            pts = [(float(p[0]), float(p[1])) for p in pl["points"]]
+            if len(pts) < 2:
+                continue
+            layers.setdefault(pl["layer"], pl.get("color"))
+            forms.append(circ.lisp_polyline(pts, pl["layer"], pl.get("color"), bool(pl.get("closed"))))
+        for lay, col in layers.items():
+            C.ensure_layer(lay, col)
+        return {"drawn": _draw_forms(forms), "layers": sorted(layers)}
+
+    return await run(f)
+
+
+@mcp.tool()
+async def c3d_import_dxf(path: str, x: float = 0.0, y: float = 0.0, scale: float = 1.0, explode: bool = True) -> dict:
+    """Bring a DXF or DWG (e.g. traced obstacle linework written with ezdxf) into the drawing at (x, y), keeping its
+    layers, and explode it so its entities are individual objects. Returns the entity count on each new layer.
+    The quickest way to put thousands of lines into the drawing (20 Oct 2026: 2,448 polylines in one call)."""
+    def f():
+        C.guard_write()
+        p = str(Path(path)).replace("\\", "/")
+        if not Path(path).exists():
+            raise Civil3DError(f"File not found: {path}")
+        before = {l["name"] for l in C.layers()}
+        C.send(f'(command "_.-INSERT" "{p}" "{x},{y}" "{scale}" "{scale}" "0")', wait=True, timeout=40, label="import dxf")
+        if explode:
+            C.lisp('(progn (setvar "QAFLAGS" 0) (command "_.EXPLODE" (entlast)) T)', 40)
+        new = sorted({l["name"] for l in C.layers()} - before)
+        counts = {}
+        for lay in new:
+            res = C.lisp(f'(if (setq mcp:s (ssget "_X" (list (cons 8 "{lay}")))) (sslength mcp:s) 0)', 20)
+            counts[lay] = int(res.get("result") or 0) if res.get("ok") else None
+        return {"inserted": path, "new_layers": counts}
+
+    return await run(f)
+
+
+@mcp.tool()
+async def vt_circulation_arrows(
+    kind: str = "ingress",
+    guide_handle: str | None = None,
+    guide_points: list[list[float]] | None = None,
+    spacing_m: float = 5.0,
+    size_m: float = 1.2,
+    reverse: bool = False,
+    stage_number: int | None = None,
+    layer: str | None = None,
+    color: int | None = None,
+) -> dict:
+    """Direction arrows along a run, green for ingress (layer CIRC-IN) and red for egress (CIRC-OUT), as filled
+    triangles every spacing_m along the guide line (or the points given), pointing the way the vehicle travels
+    (reverse=True if the line is drawn the other way). stage_number puts a numbered circle at the start of the run.
+    Draw them for every run of a swept-path sheet: they show the order of movement and give the developer the
+    basis of the signed circulation. kind: 'ingress', 'egress' (or 'in'/'out')."""
+    k = kind.lower()
+    style = circ.INGRESS if k in ("ingress", "in", "entry") else circ.EGRESS if k in ("egress", "out", "exit") else None
+    if style is None:
+        return {"error": "kind must be 'ingress' or 'egress'."}
+    lay, col = layer or style["layer"], color if color is not None else style["color"]
+
+    try:
+        pts = await asyncio.to_thread(_guide, guide_points, guide_handle, None)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    def f():
+        C.guard_write()
+        tris = circ.arrows_along(pts, spacing_m, size_m, reverse=reverse)
+        forms = circ.lisp_solids(tris, lay, col)
+        if stage_number is not None:
+            p0 = pts[-1] if reverse else pts[0]
+            C.ensure_layer(circ.STAGE["layer"], circ.STAGE["color"])
+            forms += circ.lisp_stage_label(p0[0], p0[1] + size_m * 1.6, stage_number, size_m * 0.9, circ.STAGE["layer"], circ.STAGE["color"])
+        C.ensure_layer(lay, col)
+        return {"arrows": len(tris), "drawn": _draw_forms(forms), "layer": lay, "color": col}
 
     return await run(f)
 

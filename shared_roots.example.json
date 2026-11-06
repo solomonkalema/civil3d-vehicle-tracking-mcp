@@ -1,0 +1,12 @@
+{
+  "_note": "Copy to shared_roots.json and edit. Shared project folders the civil3d MCP must never write into, and the private staging folder that mirrors each. Re-read on every call.",
+  "roots": [
+    {
+      "project": "Example roads project, shared with colleagues",
+      "shared": [
+        "D:\\Projects\\Roads Project"
+      ],
+      "staging": "D:\\Projects\\Roads Project - Claude Working"
+    }
+  ]
+}
