@@ -518,3 +518,8 @@ Section pages without layouts: `(command "_.-PLOT" "_Y" "Model" "DWG To PDF.pc3"
 - -LAYER _OFF on a pattern that includes the current layer stalls at 'really turn off the current layer?': set
   CLAYER 0 first inside every layer helper.
 - The watchdog saves every pop-up of one sweep to the same picture file name, so later pictures overwrite earlier ones.
+
+### 14.10 Consolidated lessons (14 Nov 2026)
+The job-independent summary of sections 11 to 14 is in `lessons_road_drawing_production.md` beside this file: order of work, the sheet
+checks to automate, how to review a set, what COM can and cannot reach, generating outputs from the model, office documents, and the
+settings to ask for at the start of a job. Read it first on any road drawing review or production task.
