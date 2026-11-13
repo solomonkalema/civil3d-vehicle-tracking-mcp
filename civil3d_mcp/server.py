@@ -30,6 +30,7 @@ from . import dwg
 from . import geometry as geo
 from . import production as prod
 from . import roads
+from . import roadedit as redit
 from . import section as sec
 from . import vt
 from .catalogue import HOME
@@ -41,7 +42,7 @@ from .runner import DialogPending
 from .vehicles import Vehicle, all_vehicles, get_vehicle, save_user_vehicle
 
 INSTRUCTIONS = """
-Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.9.0.
+Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.9.1.
 
 Road design production (v0.8, data-shortcut road projects):
 - Read before changing anything: road_shortcut_project(folder) for the project on disk, then road_report_file(path)
@@ -75,6 +76,12 @@ outside scripts, so the working-copy and shared-folder guards always apply:
 - c3d_quit_civil3d restarts cleanly between batches (refuses while anything is unsaved); never close data-shortcut
   drawings one by one. c3d_focus brings Civil 3D to the front for computer use: never open Civil 3D from computer
   use (open_application started a second Civil 3D on 27 Oct).
+- Screen-free road tools (v0.9.1, 11 Nov 2026). Use these before any computer use:
+  road_profile_set_pvis (replace a design profile's interior PVIs), road_profile_levels (EG/design levels to a file),
+  road_rebuild_corridor_surfaces (after every corridor rebuild), road_replace_text (title-block typos),
+  road_section_label_weeding (missing centreline labels on sections), road_label_styles + road_set_label_style_text
+  (label wording and units, e.g. low-point labels in feet), road_plot_model_window (section pages in a drawing
+  without layouts). Still screen-only: band styles, table styles, Compute Materials surface mapping.
 - c3d_status says 'restart_needed' when newer server code is installed than is running: tell the person, and
   don't work round the missing tools with scripts in the meantime.
 
@@ -772,6 +779,70 @@ async def road_stakeout(alignment: str, interval: float = 10.0, surface: str | N
     edges, walkways, drains) at `interval` m and at the exact end station, with offset, E, N and level from
     `surface` (default '<alignment> Corridor - Top'). out_csv writes the full table (staging only)."""
     return await run(prod.stakeout, C, alignment, interval, surface, targets, out_csv)
+
+
+@mcp.tool()
+async def road_profile_set_pvis(alignment: str, pvis: list[dict], profile: str | None = None) -> dict:
+    """Replace the INTERIOR PVIs of a design profile in the active working drawing (the alignment source drawing).
+    pvis: [{"station": s, "level": z, "length": L}] (L 0 = grade break without a curve). Start and end points stay.
+    Returns before/after and 'fix' when Civil 3D turned a curve into a tangent PVI (it touches its neighbour:
+    shorten it and call again). Not saved: check, then c3d_save. No screen work needed."""
+    return await run(redit.set_profile_pvis, C, alignment, pvis, profile)
+
+
+@mcp.tool()
+async def road_profile_levels(alignment: str, interval: float = 20.0, profiles: list[str] | None = None,
+                              out_txt: str | None = None) -> dict:
+    """Levels of an alignment's profiles (existing ground and design) every `interval` m plus the end station.
+    out_txt writes 'station level level ...' to a text file (staging only) instead of returning the rows: use it
+    for anything finer than 20 m."""
+    return await run(redit.profile_levels, C, alignment, interval, profiles, out_txt)
+
+
+@mcp.tool()
+async def road_rebuild_corridor_surfaces(match: str = "corridor") -> dict:
+    """Rebuild the corridor surfaces (names containing `match`) in the active working drawing.
+    road_rebuild_corridors does not do this; run it after every corridor rebuild, then c3d_save."""
+    return await run(redit.rebuild_corridor_surfaces, C, match)
+
+
+@mcp.tool()
+async def road_replace_text(old: str, new: str, dry_run: bool = False) -> dict:
+    """Replace a string in every text, mtext and attribute of the active working drawing, block definitions
+    included (e.g. a misspelt title-block word). dry_run=True only counts."""
+    return await run(redit.replace_text, C, old, new, dry_run)
+
+
+@mcp.tool()
+async def road_plot_model_window(x1: float, y1: float, x2: float, y2: float, pdf: str, scale: float = 200.0,
+                                 paper: str = "ISO full bleed A1 (841.00 x 594.00 MM)", ctb: str | None = None) -> dict:
+    """Plot a model-space window to a new PDF at 1:scale, centred on the paper (default A1 landscape).
+    For pages of section views in a drawing that has no sheet layouts: never import a layout into such a
+    drawing (it froze Civil 3D twice). One window per call; pdf must not exist; staging only."""
+    return await run(redit.plot_model_window, C, x1, y1, x2, y2, pdf, scale, paper, ctb)
+
+
+@mcp.tool()
+async def road_section_label_weeding(weeding: float = 0.3) -> dict:
+    """Set the weeding of every section grade-break label group in the active working drawing (0.3 m brings back
+    centreline labels that 1.0 m weeds out). Replaces the Properties-palette clicks."""
+    return await run(redit.section_label_weeding, C, weeding)
+
+
+@mcp.tool()
+async def road_label_styles(collection: str, style: str | None = None) -> dict:
+    """Label styles in a collection, e.g. 'ProfileLabelStyles.CurveLabelStyles' (also GradeBreakLabelStyles,
+    LineLabelStyles; 'SectionLabelStyles...', 'AlignmentLabelStyles...'). With style ('Crest and Sag' or
+    'Crest and Sag/Sag Only' for a child): its text components and their contents. Read-only."""
+    return await run(redit.label_styles, C, collection, style)
+
+
+@mcp.tool()
+async def road_set_label_style_text(collection: str, style: str, component: str, contents: str) -> dict:
+    """Set the contents of one text component of a label style in the active working drawing: what the Text
+    Component Editor does, without the screen. Read it first with road_label_styles and keep its form
+    (lines are separated by backslash-P; fields look like <[K Value(P2|RN|AP|Sn|OF)]>; 'Um' = metres, 'Uft' = feet)."""
+    return await run(redit.set_label_style_text, C, collection, style, component, contents)
 
 
 @mcp.tool()

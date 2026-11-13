@@ -296,3 +296,225 @@ v0.9 moves each step into a tool that keeps the guards.
 - **Only one client should drive Civil 3D at a time.** Another session switched the active drawing during a test
   plot; road_plot_sheets now pins its drawing and stops if the active drawing changes.
 - c3d_quit_civil3d quits cleanly when nothing open has unsaved changes; use it to restart between batches.
+
+## 13. Sheet clean-up on a staging copy: lessons from a four-road production run (10 Nov 2026, server v0.9.0)
+
+What worked, in the order to do it per road. Project and client specifics are in knowledge.local.md.
+
+**Plotting**
+- **Profile lines can vanish from a PnP layout viewport** (seen on the last sheet of two roads). The profile shows in
+  model space but not in the layout, on screen or on the PDF. road_plot_sheets' own REGENALL does not cure it, and
+  neither does setting CTAB and regenerating. What does: `(setvar "CTAB" "<layout>") _.MSPACE _.REGENALL _.PSPACE`
+  through c3d_command, then road_plot_sheets(layouts=[that one], regen=False). Do it for every PnP sheet.
+  TO BUILD IN: road_plot_sheets should do this itself for each layout that has viewports.
+- **road_plot_sheets plots one layout per call** when the "Plot Job Progress" window appears: the run comes back
+  "dialog_pending" (catalogue unknown.cf7b5bf0fcde / unknown.97d170e1550e) and the remaining layouts are dropped.
+  Call once per layout and follow each with c3d_run_status. Do not switch CTAB while a plot is still pending.
+  TO BUILD IN: treat that window as progress and carry on through the list.
+- A PDF viewer set to open new PDFs locks each file as it is written, so a replot becomes "... v2.pdf". Plot each
+  round into a fresh folder and merge from there.
+- Check a PnP PDF for a missing profile line without looking at it: count thick stroked segments (width >= 1.2 pt)
+  inside the profile grid; zero means the line is missing. Compare with the designer's own PDF of that sheet.
+- Sheet PDFs are rotated pages: text coordinates from PyMuPDF need `point * page.rotation_matrix` before use.
+
+**Styles that COM cannot reach (use the style dialogs with computer use)**
+- c3d_lisp can reach `AeccXUiLand.AeccApplication.13.9` (Civil 3D 2027), and ProfileLabelStyles.CurveLabelStyles
+  lists parent styles and their text components, but child styles (where a "Crest Only" / "Sag Only" pair keeps its
+  high/low point text), point table styles, band styles and section label groups are not reachable. Item(i) on the
+  component collections fails. Do not spend calls probing: go to Toolspace > Settings.
+- `_SHOWTS` opens Toolspace; `_MAPWSPACE _OFF` hides the Task Pane so Toolspace has room. A first click on a tree
+  after a drawing switch only gives focus: zoom on the tree and confirm it expanded before the next click.
+- A dialog opened from another dialog (Label Style Composer from a band style, Pick Band Style, Section Labels) does
+  not show in computer-use screenshots until c3d_focus is called; c3d_screen always shows it.
+- Text Component Editor: click the text pane, Ctrl+A, type the whole contents (property fields such as
+  `<[Low Point Elevation(Um|P2|RN|AP|Sn|OF)]>` are accepted as typed). Retyping drops the font override: on the
+  Format tab select all and pick the font again.
+- Feet in a metric drawing: look for `Uft` and station base `B2` in the property fields; metric is `Um` and `B3`.
+- A point table column is edited by double-clicking its Column Value cell; elevation is `<[Point Elevation(...)]>`.
+- A band label that the tangent line strikes through: Border > Background Mask = True on that label component.
+- A band that prints "??" with its labels piled at the view start: that profile view uses a different band style
+  from the others. Profile View Properties > Bands: click the row, then the small icon in the Style cell, pick the
+  style the other views use.
+- **Section grade-break labels are driven by "Weeding"** on each section's label group. At 1.0 m the centreline
+  label came and went with the geometry; at 0.3 m every section kept centreline, lane edges, kerbs and walkway
+  backs. Bulk edit: select all AECC_SECTION_GRADEBREAK_LABEL_GROUP objects (ssget + sssetfirst), `_.PROPERTIES`,
+  edit "Weeding" once. Sample Line Group Properties has no label-set column.
+- **Band labels are dropped on split (stacked) profile views.** No style setting brings them back. Add them as
+  paper-space MTEXT at the band row (vla-addmtext on PaperSpace after setting CTAB), positions from the chainage
+  labels on the plotted PDF (mm = pt x 25.4/72, origin bottom-left on a full-bleed sheet), values from the curve
+  labels and civil_profile_elevations. They are plain text and must be redone if the profile changes.
+
+**c3d_lisp**
+- An expression too long for the command line is written to a .lsp and loaded, which raises "Security - Unsigned
+  Executable File" every time (catalogue unknown.c4108e194a12). "Load Once" is the answer; the result then has to be
+  read from the matching lisp_*.txt in the server's temp folder because the run returns no value.
+  TO BUILD IN: add the temp folder to TRUSTEDPATHS for the session, or return the result after the dialog.
+- vlax-curve-getpointatdist / getclosestpointto work on AECC alignments, and surface FindElevationAtXY works through
+  vlax-invoke: enough to check an offset alignment or a corridor surface against a profile without the broken
+  civil_point_at_station (TypeError on VARIANT).
+
+**Tools that failed**
+- civil_point_at_station: `TypeError: float() argument must be ... not 'VARIANT'`.
+- road_drawing_report(parts=['corridors']) on a sheet drawing: `AttributeError: <unknown>.Corridors`.
+- road_sync_references: the first call after opening can fail with `Item.ProfileViews` or an RPC error; call again.
+- c3d_quit_civil3d refuses while a plotted drawing is "unsaved" (plotting dirties it): activate each one with
+  c3d_open_drawing and c3d_save, then quit. After the quit, wait for acad.exe to go before c3d_launch.
+
+**Checking**
+- Compare the PnP band to the profile at every labelled station, and each cross section's centreline label to the
+  profile by chainage (not by order). Where a section has no centreline label, the lane-edge label is centreline
+  minus lane width x crossfall, and the corridor top surface can be checked directly with FindElevationAtXY.
+- A count such as "N of M sections confirmed" must be made on de-duplicated files: a folder holding both a sheet
+  and its "v2" doubles the count.
+
+## 14. Seven-road production run: what works, what stalls, how to keep it cheap (11 Nov 2026, server v0.9.0)
+
+Read with section 13. Written after revising three vertical alignments and producing sheets, volumes and books for seven roads.
+
+### 14.1 Do it through the server, not the screen
+Computer use (screenshots and clicks) was the largest cost of the run. These steps need NO screen work:
+| Step | How |
+|---|---|
+| Open, sync, rebuild corridor, save | `c3d_open_drawing(read_only=false)`, `road_sync_references`, `road_rebuild_corridors`, `c3d_save` |
+| Rebuild corridor surfaces (rebuild_corridors does not) | short `c3d_lisp`: loop model space, `AeccDbSurfaceTin` named `*Corridor*`, `(vlax-invoke o 'Rebuild)` |
+| Title block values | `road_set_titleblock` |
+| "CONTRAOT" and other title text | short `c3d_lisp` over blocks: MText `vl-string-subst` |
+| Profile revision (PVIs) | COM, see 14.3 |
+| Setting-out data | `road_setout_data(alignment, out_json, profiles=[design profile])` |
+| Plot a PnP layout | `c3d_command('(setvar "CTAB" "<layout>") _.MSPACE _.REGENALL _.PSPACE ')`, then `road_plot_sheets(folder, layouts=[one], regen=false)`, then `c3d_run_status` |
+| Plot section pages without layouts | model-space `-PLOT`, see 14.5 |
+| Volumes | `road_quantities` after Compute Materials (14.4) |
+| Check a sheet | parse the PDF text (levels, labels); look at the page image once, at low dpi |
+**Added in server v0.9.1 (11 Nov 2026), each tested on a staging drawing:**
+| Tool | Replaces | Tested |
+|---|---|---|
+| `road_profile_set_pvis(alignment, pvis, profile)` | long LISP + security dialogs for PVI edits | round trip of an 8-PVI profile: identical; overlapping curve refused before any change |
+| `road_profile_levels(alignment, interval, profiles, out_txt)` | long LISP `ElevationAt` dump | yes |
+| `road_rebuild_corridor_surfaces()` | LISP loop | yes |
+| `road_replace_text(old, new, dry_run)` | LISP over blocks ("CONTRAOT") | dry run only |
+| `road_section_label_weeding(0.3)` | Properties palette clicks | 45 label groups set (COM `WeedingValue` on `AeccDbSectionGradeBreakLabeling`) |
+| `road_label_styles(collection, style)` / `road_set_label_style_text(...)` | Toolspace > Label Style Composer > Text Component Editor | read; write of the same text back (no change). A real wording change has not been plotted yet: plot one sheet and read it before trusting it |
+| `road_plot_model_window(x1, y1, x2, y2, pdf, scale)` | hand-typed `-PLOT` | 9 section views at 1:200 |
+Label style collections: `ProfileLabelStyles.CurveLabelStyles` (children under a parent are addressed 'Crest and Sag/Sag Only'), also
+`GradeBreakLabelStyles`, `LineLabelStyles`, `MajorStationLabelStyles`; other roots `SectionLabelStyles`, `AlignmentLabelStyles`, `PointLabelStyles`.
+Lines in a component are separated by `\P`. Feet show as `Uft` in a field's format string, metres as `Um`.
+
+Screen work is STILL needed for: band styles (`ProfileViewBandStyles`, not explored), table styles (benchmark table ELEV column),
+and the Compute Materials surface mapping. Next tools to build: `road_compute_materials(alignment, eg_surface, datum_surface)`, band and
+table style text, and a quiet mode for `road_plot_sheets` / `c3d_dialog_act` (the Plot Job Progress and Security dialog listings are long).
+The running server loads new code only after a restart: `c3d_status` shows `restart_needed` until then.
+
+### 14.2 Keep LISP short
+- An expression over roughly 250 characters is written to a temp .lsp and raises "Security - Unsigned Executable File". Each one costs a
+  `c3d_dialog_act(... "Load Once")` round trip plus a file read for the result.
+- Avoid it: define two or three SHORT helper functions with separate `c3d_lisp` calls, then call them. Functions are per drawing: redefine after
+  switching drawings.
+- AutoLISP is case-insensitive and dynamically scoped: a function named `PV` is destroyed by `(setq pv ...)`; a parameter named `a` is overwritten
+  by a helper that does `(setq a ...)`. Use distinct names (`GPV`, `zz`).
+- `c3d_command` accepts a long `(progn ...)` directly without the security dialog; use it for loops such as plotting several windows.
+- Never print long results into the conversation (a Quantity basis sheet, a 150-control dialog). Write to a file and read a few lines.
+
+### 14.3 Editing a design profile over COM
+1. `road_setout_data` BEFORE (json), dump "station EG design" every 2.5 m with `ElevationAt` to a text file.
+2. Fit the new PVIs outside Civil 3D (`profile_redesign.py` in the project's handover tools: one PVI per crest/sag, K and grade limits, least-squares
+   to the current levels so cut and fill stay small). Try two or three groupings and take the one with the smallest level change.
+3. In Civil 3D: remove the interior PVIs, then add the new ones. `(vlax-get profile 'PVIs)` must be fetched again after EVERY Remove or Add.
+   `(vlax-invoke pvis 'Add sta elev 3 length)` adds a symmetric parabola; `'Add sta elev 1` a tangent PVI (use for junction tie-in grade breaks).
+   Editing Station / Elevation / CurveLength in place worked on one profile and was refused ("parameter is incorrect") on another: rebuild is the
+   reliable way.
+4. A curve that touches the next curve or the profile start is added as a TANGENT PVI with no error. Shorten by 0.1 to 1 m and confirm with
+   `road_setout_data` AFTER (every curve PVI must show a CurveLength).
+5. Save the alignment drawing; corridor drawing: sync, rebuild, rebuild surfaces, check TOP surface against the profile along the centreline.
+6. Junction return profiles are NOT adjusted by this. Record it for the designer.
+
+### 14.4 Volumes
+`_AeccComputeMaterials` (once per CS drawing): OK the sample line group; criteria "Cut and Fill"; EG "<Click here to set all>" = topo surface;
+DATUM = corridor datum surface. The dropdown order differs per drawing (alphabetical): read it before clicking. Then `road_quantities` repeatedly
+until it stops returning `partial` (20 to 25 sections per call). Volumes cover first to last sample line only.
+
+### 14.5 Things that froze Civil 3D (20+ minutes, had to be ended)
+- `-LAYOUT` Template into a drawing holding many section views (twice, with a 13 MB and a 5 MB template).
+- Create Section Sheets wizard against a template that was open in the same session ("unable to clone layout").
+- COM calls while only the Start tab is open: always `c3d_launch(folder, name)` so a document exists.
+Recovery: end acad.exe, end the `python -m civil3d_mcp.server` processes (the client respawns the server clean), `c3d_launch(folder, name)`.
+Save every drawing as soon as a step succeeds, so ending Civil 3D never loses work.
+Section pages without layouts: `(command "_.-PLOT" "_Y" "Model" "DWG To PDF.pc3" "ISO full bleed A1 (841.00 x 594.00 MM)" "_M" "_L" "_N" "_W" ll ur
+"1=0.2" "_C" "_Y" "<ctb>" "_Y" "_A" pdf "_N" "_Y")` per page (1=0.2 is 1:200 in a metre drawing), then set the plot into the sheet frame as a PDF.
+
+### 14.6 Other traps met
+- A source folder can hold an unused duplicate drawing (old profile, 0.4 m off). Check which drawing the data shortcuts publish from before
+  reading levels; always compare a new extract with levels already verified on the sheets.
+- `road_sync_references` can report a corridor reference as stale/invalid while the sections still update. Verify from the plotted levels.
+- `road_plot_sheets` with several CS layouts sometimes plots only the first: one layout per call, then list the folder.
+- `road_setout_data` / first call on a just-opened drawing can fail with "no alignment named": retry once before investigating.
+- Run the long, screen-free work (BoQ workbooks, report drafts, PDF assembly) in background agents while one session drives Civil 3D.
+
+### 14.7 Added 11 Nov (typical sections)
+- Plot all layouts of a drawing in ONE step with the COM Plot object: `doc.ActiveLayout = lay; doc.Plot.PlotToFile(pdf, lay.ConfigName)` with
+  BACKGROUNDPLOT 0 (retry ActiveLayout while Civil 3D reports busy). `road_plot_sheets` plotted only the first layout of a list on several drawings.
+- Corridor layout without the screen: `BaselineRegions` -> `AppliedAssemblies` (one per frequency station) -> `GetShapes()` (codes via
+  `CorridorCodes`, offsets via `CalculatedLinks` -> `CalculatedPoints` -> `GetStationOffsetElevationToBaseline()`). Region's assembly: `AssemblyDbEntity.Name`.
+  Subassembly parameters were NOT reachable on assemblies over COM.
+- AutoCAD tables: `GetText(r,c)` / `SetText(r,c,txt)` keep cell formats if the `{\f...;` prefix is kept.
+- `Mirror` honours MIRRTEXT=0 (texts stay readable).
+
+### 14.8 Added 11 Nov (walls, side slopes, schedules)
+- Side-slope heights fast: corridor baseline `MainBaselineFeatureLines.FeatureLinesCol` -> Hinge*/Daylight* feature lines -> `FeatureLinePoints`
+  (Station, XYZ). Walking applied-assembly points per station took > 55 min on one road; feature lines take seconds.
+- Topo walls/fences: a selection set with a layer filter (WALL/FENC/BUILD/RETAIN) via pythoncom VARIANT arrays is fast; compare to the setting-out
+  road edge with `alignment.StationOffset`.
+- A new schedule sheet in a heavy typical drawing: `(command "_.-LAYOUT" "_C" "<pavement sheet>" "<new>")`, `CTAB`, `_.MSPACE _.ZOOM _C x,y 23 _.PSPACE`.
+  Never `-LAYOUT Template` there (froze Civil 3D).
+- Inline MText fonts: build `\f` codes with chr(92) in Python source ('\f' became a form feed). A note's font can fall back to the style's SHX and
+  plot grey/spaced: set the inline font to match the neighbouring table and colour 7.
+- A plotted PDF just read by c3d_pdf_page may stay locked: plot to a fresh folder instead of deleting it.
+
+### 14.9 Added 11 Nov (capitals / one font across a road project)
+- Text styles: `TextStyle.SetFont("Arial Narrow", bold, italic, 0, 34)` over COM changes every label that uses the style. Inline `\f` codes in
+  MText, table cells, label-style text components and view titles need rewriting too (regex on `\[fF][^|;]*`).
+- Label, band-label, profile/section view title and axis texts ARE reachable over COM (`TextComponents[i].Contents.Value`, `GraphStyle.TitleStyle.Text`,
+  band style `MajorIncrementLabelStyle` etc.). Field flags `(CP)` -> `(CU)` make names print in capitals.
+- NOT reachable over COM: band TITLE (it is a "Band Title" label style opened from Band Details > Compose label; COM's `TitleStyle.Text` is a dead
+  default), code set styles, link/marker/shape label styles, expressions. Use Toolspace > Settings (see section on style dialogs).
+- "Vertical" / "Horizontal" printed by a slope label on a vertical link is system text: hide it with a Text Height expression
+  `IF({Link Length}<0.005,0.0000001,<height in m>)`.
+- Walk only label/band/view/table style collections: object styles carry no text and make the pass 10x slower. With > 10 drawings open a style
+  pass goes from 1 min to 20 min: quit and relaunch every few drawings.
+- PDF text extraction also returns text outside viewports and zero-height text: test visibility (bbox inside the page, size >= 1 pt, render the
+  spot) before chasing it.
+- Every plot opens its PDF in the default viewer (Foxit here) and the viewer locks the file: write rebuilt PDFs to a new name when the target is
+  locked, and plot to a fresh folder each time.
+- Toolspace dialogs open at fixed positions: once one style has been edited by hand, the whole click sequence can be replayed in a single
+  computer_batch per drawing (check with a zoom after each dialog).
+
+## 15. Lessons from a swept-path run on a TIA site, 13 Nov 2026
+
+### Vehicle Tracking behaviour [observed]
+- **Follow runs on past the end of the guide** until the trailing axle reaches the end point: about one wheelbase
+  plus ~0.5 m. Forwards, the car finished with its rear axle on the guide end and its front 3.9 m further on;
+  in reverse, the rear ran ~4 m past (into a wall). Stop guide lines that much short of the intended stop.
+  A reverse swing that a driver would stop mid-turn cannot be modelled with Follow: report it from sp_check_guide
+  and label it a kinematic check.
+- **Library Explorer:** the Search box is reliable (it matches vehicle names, not group names); tree_keys type-ahead
+  is not on the full tree (it landed on the wrong group three times). After a search, the highlight often lands on
+  the vehicle's sub-unit row ('... Tractor'): click the vehicle row itself. The drawing canvas tooltip 'Adjust
+  vertex curve' can sit over Proceed: move the mouse away before clicking. One run silently used the previous
+  vehicle - **confirm every run's vehicle from its inserted profile title.**
+- INSERTPROFILE with a point in the same (command ...) is rejected and waits at 'Select Location'. Working pattern:
+  c3d_command('(command "INSERTPROFILE" (handent "<path>")) ', wait=False), then c3d_run_input('x,y').
+  Each profile's text block is ~15 m wide: space profiles 20 m apart or on separate rows.
+- VT paths may not draw after layer changes until REGENALL. The ATR layer numbers are reused after deletions.
+- Obstacles traced from a PDF picked up hatch strokes of a covered channel: filter short hatch strokes off the
+  obstacle layers, and leave overhead outlines (gate canopy) out.
+
+### Server bugs to fix [observed]
+- guide_handle (sp_check_guide, vt_follow_run) with an all-digit handle such as 1641 arrives as an integer and is
+  rejected by validation. Type the parameter as a string.
+- layers_restored after vt_follow_run turns ATR layers OFF (including the one holding the new path) and guide layers
+  too; it should restore the previous state.
+- File-loaded LISP (long c3d_lisp, vt_circulation_arrows, c3d_draw_polylines) raises SECURELOAD 'Unsigned Executable
+  File' in a fresh session; answered with Load Once each time (catalogue: acad.secureload_unsigned). Avoid the file
+  route for short code, or ask the person once about adding the temp folder to TRUSTEDPATHS.
+- -LAYER _OFF on a pattern that includes the current layer stalls at 'really turn off the current layer?': set
+  CLAYER 0 first inside every layer helper.
+- The watchdog saves every pop-up of one sweep to the same picture file name, so later pictures overwrite earlier ones.

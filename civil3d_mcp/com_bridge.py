@@ -37,7 +37,7 @@ except ImportError:  # lets the geometry tools and tests run elsewhere
     HAVE_COM = False
 
 RPC_RETRY = {-2147418111, -2147417846}  # CALL_REJECTED, SERVERCALL_RETRYLATER
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "0.9.1"
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
@@ -337,7 +337,13 @@ class Civil3D:
                 self._retry(lambda: self._app.Name, timeout=5)
                 return self._app
             except Civil3DError:
-                raise
+                # v0.9.1: a proxy to a Civil 3D that has since closed answers like a busy one ('<unknown>.Name').
+                # If no acad.exe is left, drop it so the caller sees 'No running Civil 3D' and c3d_launch can start one.
+                from .launcher import acad_pids
+                if acad_pids():
+                    raise
+                self._app = None
+                self._hwnd = 0
             except Exception:
                 self._app = None
         self._app = attach_app()

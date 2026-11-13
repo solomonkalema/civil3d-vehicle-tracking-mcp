@@ -2,7 +2,17 @@
 
 An MCP server that lets Claude Desktop work inside a running Civil 3D session over COM. The core gives general access to drawings and Civil 3D objects. Transport modules sit on top: swept paths (a Python envelope engine and Vehicle Tracking runs), junction geometry, and sight distance.
 
-Version 0.9.0, 27 October 2026. Written for Civil 3D 2027 Metric with Vehicle Tracking 2027.
+Version 0.9.1, 11 November 2026. Written for Civil 3D 2027 Metric with Vehicle Tracking 2027.
+
+## What is new in 0.9.1 (11 November 2026)
+
+Road sheet editing, from a seven-road production run. See sections 13 to 15 of `knowledge/knowledge.md`.
+
+- New tools (`roadedit.py`): `road_label_styles`, `road_set_label_style_text`, `road_section_label_weeding`,
+  `road_profile_levels`, `road_profile_set_pvis`, `road_rebuild_corridor_surfaces`, `road_replace_text`,
+  `road_plot_model_window`.
+- Knowledge: sheet clean-up on a staging copy, what stalls a long production run and how to keep it cheap, and
+  lessons and known server bugs from a swept-path run (13 November 2026).
 
 ## What is new in 0.9 (27 October 2026)
 
