@@ -33,6 +33,8 @@ patch_*.py
 # Private, per-machine project notes and settings (never published)
 knowledge/knowledge.local.md
 *.local.md
+knowledge/*.local.*
+knowledge/*.moved_*
 knowledge/*.bak*
 shared_roots.json
 test_output/
