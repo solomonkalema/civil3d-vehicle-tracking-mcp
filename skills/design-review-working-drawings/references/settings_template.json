@@ -1,0 +1,73 @@
+{
+  "_note": "Client standards for this job. Fill from the engineer's answers or the client's accepted reference set. Leave null if unknown and ask.",
+  "sheet_size": null,
+  "scale_notation": null,
+  "standard_scales": {
+    "plan": null,
+    "profile_h": null,
+    "profile_v": null,
+    "cross_section": null,
+    "detail": null
+  },
+  "title_block": {
+    "type": null,
+    "_type_options": [
+      "attribute block",
+      "plain text"
+    ],
+    "parties": [],
+    "sign_off_fields": [],
+    "initials_rule": null,
+    "date_format": null
+  },
+  "status_wording": null,
+  "numbering_rule": null,
+  "revision_rule": null,
+  "text": {
+    "style": null,
+    "font": null,
+    "min_height_mm_at_issue_size": null,
+    "capitals_only": null
+  },
+  "layers": {
+    "scheme": null,
+    "plot_style_table": null
+  },
+  "survey": {
+    "coordinate_system": null,
+    "axis_order": null,
+    "level_datum": null,
+    "benchmarks_source": null
+  },
+  "bill_item_order_source": null,
+  "section_interval_m": null,
+  "design_decisions_by": null,
+  "instructions_recorded_in": null,
+  "output_folder": null,
+  "book": {
+    "section_order": [],
+    "divider_pages": null,
+    "standard_detail_back": null,
+    "drawing_list_format": null
+  },
+  "scale_box": {
+    "rows": null,
+    "_example": "A1 row and A3 (reduced) row, reduced = 2 x full size",
+    "bar_scale": null
+  },
+  "setting_out": {
+    "interval_m": null,
+    "points_staked": [],
+    "curve_tables_required": null
+  },
+  "status_codes": {
+    "legend": null,
+    "code_for_this_issue": null
+  },
+  "accepted_reference_set": {
+    "path": null,
+    "read_on": null,
+    "conventions_noted": [],
+    "faults_noted_not_to_copy": []
+  }
+}

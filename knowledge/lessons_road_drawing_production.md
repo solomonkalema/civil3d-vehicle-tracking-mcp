@@ -2,7 +2,7 @@
 
 Consolidated on 14 Nov 2026 from a seven-road detailed-design job (plan and profile, cross sections, typical sections, books of
 drawings, BoQs, reports). Written to be reused on other jobs: client-specific values are marked as settings. Detail behind each
-point is in section 14 of `knowledge.md`.
+point is in `knowledge.md` section 14 and in the job's own progress log.
 
 ## 1. The order that works
 1. Read before changing: project structure, which drawing references which, what is stale.
@@ -90,7 +90,108 @@ point is in section 14 of `knowledge.md`.
 - Who decides geometry changes, and where the engineer's sign-off is needed.
 
 ## 9. Reusable scripts written on this job (to become MCP tools)
+Folded into the server in v0.10 (14 Nov 2026): caps, caps_styles, style_scan, plot_all, proflines, fontcheck, fix_end,
+side_slopes, topo_walls, and the merge step of replot_sheets. See knowledge.md section 16. The rest remain job scripts.
 caps (text to capitals, fonts), caps_styles (Civil 3D styles), plot_all (viewport regen + plot), proflines (profile-line check),
 fontcheck (fonts and lowercase in a PDF), band_fix / band_gaps / band_overlay (schematic bands), replot_sheets (plot, merge, sheet
 count guard), fix_end (sub-title chainage), sides (LHS/RHS boxes), side_slopes / slope_table, topo_walls / wall_clearance,
 typicals, setout_pages, location_map (+ shp, ogr readers), build_book, report_typicals, style_scan.
+
+## 10. From design drawings to working drawings (added 14 Nov 2026)
+From a completed 25-junction improvement and traffic-signal job: 95 design sheets against 420 final sheets, plus one shop
+drawing that was rejected and then approved. Plain AutoCAD geometry, no Civil 3D objects, so sections 3 and 5 above (model,
+bands, COM reach) did not apply; sections 1, 4, 6 and 8 held. The full checklist is in the `design-review-working-drawings`
+skill; this section is the summary.
+
+### 10.1 What a checker rejects on
+The first submission came back with one line: reconsider drainage, shoulder and slope. The approved one added: shoulder, berm
+and verge-fall dimensions and side slopes on every section; reset drain inverts; chainage on plans; a signed check box and a
+revision table; one scale per sheet. Order of a checker's questions: does it drain, are the section elements defined, can it be
+set out, is there a signed check and revision record. Presentation comes after these.
+
+### 10.2 What a working drawing carries that a design drawing does not
+- Sheet system: one sheet per trade in construction order (removal, drainage, kerbs, road safety, pavement, marking), cut from
+  ONE master plan by layer state; numbers `group-trade-detail`; expect about four times the design sheet count.
+- Title: place, work type, chainage range, status, revision. Scale written with the paper size.
+- A bill-order quantity table on every sheet (zero rows kept) and each quantity also labelled where it occurs.
+- Control points (E, N, Z) plotted and tabulated on every plan; axis order and datum stated; 20 m chainage.
+- Setting-out per object: coordinates and levels for every pit, headwall corner, kerb point, pole, handhole.
+- Current survey under every profile and section. Design levels were 0.5 to 0.8 m off the contractor's survey: check first.
+- Profile on every paved road; sections at 20 m with widths, crossfalls, layers, drain inverts, side slopes.
+- Drainage: numbered nodes, inverts both ends, gradients, tie-ins, a sheet per non-standard crossing.
+- Structures: bar marks, shapes, bending schedule with weights, concrete class, laps, joints, lifting; one sheet per size used.
+- Signals: a cabling sheet beside each plan; typed, numbered, measured duct runs; every cable type; the power supply drawn
+  (source, meter, breaker, route). Power was the least designed item and grew the most.
+- Existing utilities with owners; removal as its own sheet; varied work with both extent and specification.
+
+### 10.3 Faults that reached the final issue (hunt for these)
+- Copy-paste leftovers: another site's control points, table heading, pipe size or pasted table. The PDF text layer finds them:
+  search every sheet for the names and numbers of the OTHER sites. Hidden text under a mask marks a cloned sheet.
+- Quantity table not equal to the sum of its own labels; same item with different values on sister sheets.
+- Cross-references to sheet numbers that no longer exist; references to cancelled items.
+- Bar length on the view differing from the schedule; counts copied across sizes; outlet level above pit invert.
+- Profile rows with a repeated placeholder level; band grade not reproducing the levels; proposed below existing on an overlay.
+- Drawing list: duplicate row, a sheet under two numbers, a row copied from another, empty scale cells.
+- A correction made on the commented sheet but not on its sister sheets.
+- Revision recorded only in file names; superseded files left beside current ones; approval stamps and setting-out sheets
+  dropped from the as-built.
+
+### 10.4 Working method that was cheap and reliable
+- One text dump per PDF (page by page) and a render helper (whole sheet at about 70 dpi, tiles at 150 to 250). Text first.
+- Title blocks drawn as outlines do not extract: tile many title-block strips into one image and read them in batches.
+- Title blocks made of plain text are invisible to an attribute-based title-block tool: check which kind before promising it.
+- Split a large set among read-only reviewers by sheet group, each writing findings to a file; one session keeps the CAD.
+- Keep a design-to-working register: every design item kept, changed or deleted, and the instruction behind it.
+
+### 10.5 Limits of this evidence
+One project, sampled in places, and one rejection on file. Treat 10.1 as a working assumption and correct it on the next job.
+
+## 11. What accepted design packages look like, and where they disagree with themselves (added 14 Nov 2026)
+From a client's accepted final-design books for twelve urban roads (Civil 3D, data shortcuts) and a complete detailed-design
+issue for an 8 km road (drawings, signals, structures, bill, specification, report). Read through the server only: no screen
+work was needed. The checks are in the review checklist, sections 1, 6 and 10.
+
+### 11.1 Anatomy of an accepted road book (treat as that client's settings, not as a rule)
+- Cover, then a divider per section: general information (drawing list, location map, benchmark list), typical sections and
+  pavement schedule, plan and profile, setting-out table, signs and markings layout, cross-sections, then a common back of
+  standard details shared by every road.
+- Numbering `client / project / road code - sheet type / serial / status / revision`, each part in its own title-block cell
+  (attribute tags), with a status-code legend and a scale box holding a full-size row and a reduced row.
+- A project folder tree numbered in book order: design files (survey, geometry) feeding plan-production folders, one per sheet
+  type, each with its own sheet set. Gaps in the numbering mark sheet types the job did not need.
+- Plan and profile at 1:500 / 1:100 on A1 with band rows for chainage, design level, existing level, cut/fill, horizontal and
+  vertical schematics, superelevation. Sections every 10 or 20 m. Stake-out of centre line and lane and kerb edges every 10 m.
+- A design issue of this kind carries NO quantities on sheets, no trade sheets, no drainage levels, no kerb or pit setting-out
+  and no revision entries. Those arrive with working drawings (section 10.2).
+
+### 11.2 What the checker let through (do not copy it; do not assume it is wanted)
+Draft status code on a final issue; low-point labels in feet and negative curve lengths on most roads; a stated scale that is
+not the drawn one; sheet numbers repeated or skipped (and the same slip in the shared standard back of every book); general
+sheets carrying the wrong title; a road with no drawing list; setting-out pages with no title block and a corrupt row; the
+same wrong chainage range pasted onto three roads' sheets; different approver initials on sheets of one drawing.
+Lesson: an accepted set shows the client's conventions AND the faults nobody caught. Separate the two with the engineer.
+
+### 11.3 Where packages disagree with themselves
+- One road, six end chainages (title, band, list, stake-out, bill header, signs sheet).
+- Benchmark sheet against report: identifiers shifted and easting / northing swapped.
+- Pavement in five places: sub-base class in the bill differing from the drawings; a walkway surface specified three ways;
+  asphalt thickness differing between typical section and schedule; wearing-course mix named differently in bill and drawing.
+- Report against typical sections: lane, walkway and parking widths, crossfall direction, grade range, section limits.
+- Structures named in the report (a box culvert, twin pipes) with no drawing and no bill line.
+- Schedules that exist only in the report (drain runs, culvert lists, sign schedules), so the bill cannot be traced to a
+  drawing: pipe lengths by diameter, manhole counts and sign counts did not reconcile.
+- Bill rules: one surfacing area drives asphalt, prime and tack; kerb = sides x length; counts identical on two roads were
+  copied. The bill preamble required sections at a closer interval than the drawings had.
+- What did reconcile: profile closure (every vertical point), section centre-line levels against the profile, stake-out
+  levels against the profile, culvert register against the structural schedule, bar schedule totals. The model-derived
+  numbers were right; the typed ones were not.
+
+### 11.4 Document control seen
+Letters before approval and numerals after, with a dated, initialled revision table on each sheet; a transmittal cover per
+volume; one drawing number covering many folios (short list, but a change to one folio revises them all).
+
+### 11.5 Reading such a project through the server
+`road_shortcut_project`, `road_report_file(parts=[...])`, `road_titleblock_audit`, `road_sheets` gave: reference structure,
+viewport scales against stated scales, title-block tags and values, sample-line and corridor structure, assemblies by region.
+Shortcut paths stored from an earlier folder name are reported missing although the drawings resolve. Typical sections and
+general sheets are plain drawings: their stated scale is a label, not a viewport property.

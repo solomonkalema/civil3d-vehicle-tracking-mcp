@@ -1,0 +1,169 @@
+{
+ "case": "review_synthetic_01",
+ "kind": "drawing review",
+ "material": "review_set_01.pdf from make_review_set.py (8 synthetic A3 sheets, D-01 to D-08, one junction)",
+ "task": "You are the CAD engineer checking this set of working drawings before issue. Load the design-review-working-drawings skill and follow it. The set is the PDF given; there is no design set and no client settings (note presentation points as queries). Write findings in the skill's finding format and return the full report as text. Do not read any other file in the folder.",
+ "pass_mark": 0.7,
+ "must_find": [
+  {
+   "id": "list_missing_sheet",
+   "what": "D-09 is on the drawing list but there is no such sheet",
+   "any": [
+    "D-09"
+   ]
+  },
+  {
+   "id": "duplicate_number",
+   "what": "Two sheets are numbered D-07 (pavement and road marking); no sheet is numbered D-08",
+   "any": [
+    "D-07.{0,160}(twice|duplicate|two sheets|both|repeat)",
+    "(duplicate|two sheets|repeat).{0,160}D-07",
+    "D-08.{0,120}(missing|no sheet|not present|absent|numbered D-07)"
+   ]
+  },
+  {
+   "id": "removal_sum",
+   "what": "D-02 pavement removal: table 420.0 m2, labels sum to 400.0 m2",
+   "any": [
+    "420(\\.0)?.{0,200}400(\\.0)?",
+    "400(\\.0)?.{0,200}420(\\.0)?"
+   ]
+  },
+  {
+   "id": "leftover_site",
+   "what": "D-02 control point table is headed JUNCTION B on a Junction A sheet",
+   "any": [
+    "JUNCTION B"
+   ]
+  },
+  {
+   "id": "pit_levels",
+   "what": "D-03 CP3: invert out 100.120 is above invert in 100.050",
+   "any": [
+    "CP3.{0,200}(100\\.12|100\\.05|above|higher|wrong way|rises|uphill|backfall|adverse)"
+   ]
+  },
+  {
+   "id": "pipe_gradient",
+   "what": "D-03 P2: stated 1.00 %, levels give 0.50 % (100.250 to 100.050 over 40 m)",
+   "any": [
+    "P2.{0,200}(0\\.5|1\\.0)",
+    "(1\\.00? ?%|1 ?%).{0,200}0\\.50? ?%"
+   ]
+  },
+  {
+   "id": "stale_reference",
+   "what": "D-03 refers to drawing D-12, which is not in the set",
+   "any": [
+    "D-12"
+   ]
+  },
+  {
+   "id": "schedule_total",
+   "what": "D-04 bar schedule total 180.00 kg, rows sum to 204.76 kg",
+   "any": [
+    "204\\.7",
+    "180(\\.00?)?.{0,200}(sum|rows|total|add)"
+   ]
+  },
+  {
+   "id": "spacing_string",
+   "what": "D-04 '19@200=4000' does not close (19 x 200 = 3800)",
+   "any": [
+    "19 ?@ ?200",
+    "3800"
+   ]
+  },
+  {
+   "id": "bar_length",
+   "what": "D-04 R3 is 2960 on the view and 2296 in the schedule",
+   "any": [
+    "2296.{0,200}2960",
+    "2960.{0,200}2296"
+   ]
+  },
+  {
+   "id": "profile_closure",
+   "what": "D-05 second tangent: 102.000 - 1.5 % x 80 m = 100.800, stated end level 101.100",
+   "any": [
+    "100\\.80?0?.{0,200}101\\.10?0?",
+    "101\\.10?0?.{0,200}100\\.80?0?"
+   ]
+  },
+  {
+   "id": "placeholder_levels",
+   "what": "D-05 proposed level 101.700 repeated at 0+120, 0+140 and 0+160",
+   "any": [
+    "101\\.70?0?.{0,200}(repeat|three|3 times|same|placeholder|identical|constant|flat)",
+    "(repeat|placeholder|identical).{0,200}101\\.70?0?",
+    "(0\\+140|0\\+160).{0,120}101\\.70?0?",
+    "101\\.70?0?.{0,160}(0\\+140|0\\+160)"
+   ]
+  },
+  {
+   "id": "section_level",
+   "what": "D-06 0+040: FH 100.650 against 100.800 on the profile",
+   "any": [
+    "100\\.650?.{0,200}100\\.80?0?",
+    "100\\.80?0?.{0,200}100\\.650?"
+   ]
+  },
+  {
+   "id": "section_widths",
+   "what": "D-06 0+040: widths add to 10.0 m, total stated 10.5 m",
+   "any": [
+    "10\\.5.{0,160}10(\\.0)?\\b",
+    "10\\.0.{0,160}10\\.5"
+   ]
+  },
+  {
+   "id": "pavement_type",
+   "what": "D-07 table says Type A, composition sketch says Type C",
+   "any": [
+    "TYPE A.{0,200}TYPE C",
+    "TYPE C.{0,200}TYPE A"
+   ]
+  },
+  {
+   "id": "empty_scale",
+   "what": "D-07 pavement sheet: scale cell empty",
+   "any": [
+    "scale.{0,80}(empty|blank|missing|not stated|no scale)",
+    "(empty|blank|missing|no) scale"
+   ]
+  },
+  {
+   "id": "placeholder_text",
+   "what": "Road marking legend: 'TBA'",
+   "any": [
+    "TBA"
+   ]
+  }
+ ],
+ "decoys": [
+  {
+   "id": "cutting_ok",
+   "what": "D-02 pavement cutting 12.5 + 30.0 = 42.5 agrees",
+   "flag_if": [
+    "cutting.{0,120}(mismatch|differ|does not|disagree|wrong)(?!.{0,80}(no defect|agree|ok))"
+   ]
+  },
+  {
+   "id": "p1_ok",
+   "what": "D-03 P1 0.50 % agrees with its levels",
+   "flag_if": [
+    "P1\\b.{0,120}(mismatch|differ|does not|disagree|wrong|incorrect)"
+   ]
+  },
+  {
+   "id": "pavement_area_ok",
+   "what": "D-07 600.0 + 250.0 = 850.0 agrees",
+   "flag_if": [
+    "850(\\.0)?.{0,120}(mismatch|differ|does not|disagree|wrong)"
+   ]
+  }
+ ],
+ "known_artefacts": [
+  "The sheets are schematic: plans, profile and sections are not drawn to their stated scales and carry little geometry. A reviewer who reports that is right; it is not scored."
+ ]
+}

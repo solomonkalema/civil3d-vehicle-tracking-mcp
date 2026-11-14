@@ -2,7 +2,36 @@
 
 An MCP server that lets Claude Desktop work inside a running Civil 3D session over COM. The core gives general access to drawings and Civil 3D objects. Transport modules sit on top: swept paths (a Python envelope engine and Vehicle Tracking runs), junction geometry, and sight distance.
 
-Version 0.9.1, 11 November 2026. Written for Civil 3D 2027 Metric with Vehicle Tracking 2027.
+Version 0.10.0, 14 November 2026. Written for Civil 3D 2027 Metric with Vehicle Tracking 2027.
+
+## What is new in 0.10 (14 November 2026)
+
+Drawing review and drafting standards. The hand-run scripts of the seven-road production run and of a design-against-as-built
+drawing study are now tools. See section 16 of `knowledge/knowledge.md` and section 10 of
+`knowledge/lessons_road_drawing_production.md`.
+
+- Sheet checks on PDFs, no Civil 3D needed (`sheetcheck.py`): `sheet_pdf_text` (dump a set's text first),
+  `sheet_find_text` (copy-paste leftovers, placeholders, cross-reference targets, with a visibility flag),
+  `sheet_pdf_tile`, `sheet_titleblocks` (12 title blocks per image), `sheet_profile_lines`, `sheet_fonts`,
+  `sheet_merge_pdfs` (neutral metadata, sheet-count guard, never overwrites).
+- Drafting in Civil 3D (`drafting.py`): `road_plot_all_layouts` (every layout in one call through the Plot object,
+  viewports regenerated, optional device override), `road_text_capitals`, `road_text_font`, `road_style_text`
+  (scan / list / capitals for label, band, view and table styles), `road_rename_layouts`, `road_side_slopes`
+  (fill and cut height from corridor feature lines, with runs above a threshold), `road_survey_lines`.
+- House-style values (font, capitals, thresholds, author) are parameters: they are the client's or the engineer's settings.
+- `skills/design-review-working-drawings`: a skill for reviewing a design set and producing working drawings, with the
+  review checklist and a client-settings template.
+- The method lives in the server, not only in a skill: `c3d_guide(topic, section)` serves the review checklist, the lessons,
+  a tool map and the knowledge base one section at a time; `task_preflight('drawing_review' | 'working_drawings')` gives the
+  questions to ask; the server instructions carry the review order and the rule that design matters go to the engineer.
+- Lessons inbox: `c3d_note_lesson`, `c3d_lessons_inbox`, `c3d_lesson_done`. Sessions record gaps and lessons as they happen,
+  in a private file that is never published.
+- `road_titleblock_audit`: every sheet's title block in one compact table, with flags (stated against drawn scale, values
+  that vary between sheets, sequence gaps).
+- `evals/`: a synthetic eight-sheet set with planted faults, an answer key and a scorer, for re-testing a skill or a model.
+- Tested: 24 new unit tests (105 in all). Live on a working copy: capitals, font (dry run), layout rename (dry run),
+  survey lines, plot-all with a device override, style text scan and list. Ported with the same logic but not re-run after
+  porting: `road_style_text(action='capitals')` and `road_side_slopes` on a corridor.
 
 ## What is new in 0.9.1 (11 November 2026)
 

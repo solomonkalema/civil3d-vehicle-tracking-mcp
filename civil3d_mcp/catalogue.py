@@ -224,6 +224,7 @@ class Catalogue:
         return {
             "workflow": workflow,
             "ask_before_running": wf.get("questions", []),
+            "read_first": wf.get("read_first", []),
             "known_dialogs": rows,
             "how_answers_are_used": (
                 "Pass answers to the run tool keyed by dialog id. A dialog is answered without Claude only on a "

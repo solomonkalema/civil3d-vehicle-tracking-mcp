@@ -29,3 +29,14 @@ test_output/
 *.patch
 patch_*.py
 *.pdf
+
+# Private, per-machine project notes and settings (never published)
+knowledge/knowledge.local.md
+*.local.md
+knowledge/*.bak*
+shared_roots.json
+test_output/
+*.bundle
+*.patch
+patch_*.py
+*.pdf

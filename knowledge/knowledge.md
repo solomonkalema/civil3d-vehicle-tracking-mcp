@@ -523,3 +523,49 @@ Section pages without layouts: `(command "_.-PLOT" "_Y" "Model" "DWG To PDF.pc3"
 The job-independent summary of sections 11 to 14 is in `lessons_road_drawing_production.md` beside this file: order of work, the sheet
 checks to automate, how to review a set, what COM can and cannot reach, generating outputs from the model, office documents, and the
 settings to ask for at the start of a job. Read it first on any road drawing review or production task.
+
+## 16. Drawing review and drafting standards as tools (v0.10, 14 Nov 2026)
+
+The scripts listed in section 9 of the lessons file are now server tools, with house-style values as parameters.
+
+### Sheet checks (PDF only, no Civil 3D) [tested on a 420-sheet set]
+| Tool | Use |
+|---|---|
+| `sheet_pdf_text(pdfs, out_dir)` | first step on any set: one text file per PDF, page headers inside |
+| `sheet_find_text(pdfs, terms)` | another site's name or number on this sheet; placeholders; "see drawing" targets. `visible=false` marks hidden text, which marks a cloned sheet |
+| `sheet_pdf_tile(pdf, page, dpi, box)` | read small text; whole sheets stay with `c3d_pdf_page` at 60 to 70 dpi |
+| `sheet_titleblocks(pdf)` | 12 title-block strips per image; the only way when the block is outline lettering |
+| `sheet_profile_lines(pdfs)` | design-profile stroke present on every plan-and-profile page (thresholds suit A1: lower for A3) |
+| `sheet_fonts(pdf, house_font, capitals)` | fonts off the house font; lowercase words |
+| `sheet_merge_pdfs(files, out_pdf, author, expect_pages)` | assemble a book; wrong count is named "(CHECK sheet count)" |
+Observed: `sheet_find_text` found a table belonging to another junction lying hidden on a sheet, and six stale references to
+sheet numbers that no longer existed, in seconds. Tables and title blocks drawn as outlines never appear in the text, even on
+pages with a normal word count.
+
+### Drafting in Civil 3D
+| Tool | Replaces | Tested |
+|---|---|---|
+| `road_plot_all_layouts(folder, layouts, regen, device)` | plot_all script; `road_plot_sheets` plotting only the first layout | two A3 layouts; a layout set to a system printer fails with a clear 'fix': pass `device='DWG To PDF.pc3'` |
+| `road_text_capitals(dry_run)` | caps script | 446 texts on a working copy; second pass finds nothing; plotted sheet has no lowercase |
+| `road_text_font(font, dry_run)` | font pass | dry run only |
+| `road_style_text(action, only, font)` | style_scan / caps_styles | scan and list (2 s for two collections); 'capitals' not re-run after porting |
+| `road_rename_layouts(old, new, dry_run)` | end-chainage fix | dry run |
+| `road_side_slopes(alignment, out_csv, step, threshold)` | side_slopes script | guard only; logic unchanged from the script that ran on seven roads |
+| `road_survey_lines(out_json, keys)` | topo walls script | 446 objects on two layers |
+Still scripts on the job (too job-specific to generalise yet): typical sections from corridor regions, setting-out pages,
+location map, slope-protection schedule, wall clearance, band label gap finder, book assembly around an existing book.
+
+### Plain AutoCAD sets [observed]
+A set drawn without Civil 3D objects (lines, text, hatches) has no alignments, profiles or styles to read. What helps there:
+`road_sheets` (layout, paper, viewport scale), `c3d_layers(with_counts)` (one master plan with a layer per trade is the usual
+structure), `road_replace_text`, `road_text_capitals`, `road_plot_all_layouts`. Title blocks made of plain text are invisible
+to `road_set_titleblock`, which reads attributes: check `road_sheets` first (an empty 'blocks' list means plain text).
+
+### Guidance served by the server [v0.10]
+`c3d_guide('index')` lists the topics. Read one section at a time: `c3d_guide('review_checklist', '5')`,
+`c3d_guide('lessons', '11')`, `c3d_guide('tool_map')`, `c3d_guide('knowledge', '14')`. `c3d_knowledge` still returns the whole
+knowledge file plus the private notes. `task_preflight('drawing_review')` and `('working_drawings')` return the questions and
+what to read first. Record every gap or lesson with `c3d_note_lesson` when it happens; `c3d_lessons_inbox` at the start of a
+job shows what earlier sessions met. `road_titleblock_audit` replaces reading title blocks out of `road_report_file`.
+`evals/` holds a repeatable drawing-review trial (17 planted faults): run it after changing the skill or the checklist and
+before trusting a different model.

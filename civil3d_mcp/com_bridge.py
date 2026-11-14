@@ -37,7 +37,7 @@ except ImportError:  # lets the geometry tools and tests run elsewhere
     HAVE_COM = False
 
 RPC_RETRY = {-2147418111, -2147417846}  # CALL_REJECTED, SERVERCALL_RETRYLATER
-SERVER_VERSION = "0.9.1"
+SERVER_VERSION = "0.10.0"
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 

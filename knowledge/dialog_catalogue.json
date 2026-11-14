@@ -25,6 +25,39 @@
         "Quantities: which sample line group, and is Compute Materials already run? Stake-out interval (default 10 m)?",
         "Compare against what: the issued PDF book or the client's reference project?"
       ]
+    },
+    "drawing_review": {
+      "questions": [
+        "Which files are the set to review (PDFs, and DWGs if any), and is there an earlier issue or a design set to compare with?",
+        "Is there an accepted reference set from this client? It defines numbering, title block, scales and what is tolerated.",
+        "Client standards: sheet size and scale notation, title-block fields and who signs each, status wording, numbering rule, revision rule, text style and case, layers and plot style. (Unknown ones are reported as queries, not defects.)",
+        "Coordinate system, axis order (E,N or N,E), level datum and the benchmark list?",
+        "Can the design report, the bill of quantities with its preamble, the specification and the setting-out data be provided for the cross-document checks?",
+        "Who decides design matters (class C findings), and where are instructions and earlier review comments recorded?",
+        "Where does the report go, in what format, and who may see it? Nothing is sent or shared without an explicit yes."
+      ],
+      "read_first": [
+        "c3d_guide('review_checklist', '0')",
+        "c3d_guide('review_checklist', '1')",
+        "c3d_lessons_inbox(area='drawing review')"
+      ]
+    },
+    "working_drawings": {
+      "questions": [
+        "Which design set is the starting point, and has it been reviewed (run task_preflight('drawing_review') first if not)?",
+        "Is there a current survey by the contractor, with control points and benchmarks? Design levels are checked against it before anything is drawn.",
+        "Sheet system: numbering rule (for example group-trade-detail), the trades and their order, sheet size, scales by sheet type.",
+        "Title block: attribute block or plain text, fields, who prepares / checks / approves, date format, status wording, revision rule.",
+        "Bill of quantities item order and units, so each sheet's quantity table follows it.",
+        "Section interval, and what each cross-section must state (widths, crossfalls, layers, drain inverts, side slopes).",
+        "Working folder: originals are never edited; where do copies and plots go?",
+        "Who decides design matters, and how are comments and conditions of approval tracked?"
+      ],
+      "read_first": [
+        "c3d_guide('review_checklist', 'what a working drawing')",
+        "c3d_guide('review_checklist', 'order of production')",
+        "c3d_guide('tool_map')"
+      ]
     }
   },
   "entries": [

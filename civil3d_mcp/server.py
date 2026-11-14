@@ -25,9 +25,13 @@ except ImportError:  # SDK 1.x
 from shapely.geometry import MultiPolygon, Point, Polygon
 
 from . import circulation as circ
+from . import drafting as draft
+from . import sheetcheck as shc
 from . import civil as civ
 from . import dwg
 from . import geometry as geo
+from . import guide as gde
+from . import lessons as les
 from . import production as prod
 from . import roads
 from . import roadedit as redit
@@ -42,7 +46,7 @@ from .runner import DialogPending
 from .vehicles import Vehicle, all_vehicles, get_vehicle, save_user_vehicle
 
 INSTRUCTIONS = """
-Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.9.1.
+Civil 3D over COM, for transport engineering work (TIAs, swept paths, junctions, road design). Server v0.10.0.
 
 Road design production (v0.8, data-shortcut road projects):
 - Read before changing anything: road_shortcut_project(folder) for the project on disk, then road_report_file(path)
@@ -82,6 +86,26 @@ outside scripts, so the working-copy and shared-folder guards always apply:
   road_section_label_weeding (missing centreline labels on sections), road_label_styles + road_set_label_style_text
   (label wording and units, e.g. low-point labels in feet), road_plot_model_window (section pages in a drawing
   without layouts). Still screen-only: band styles, table styles, Compute Materials surface mapping.
+- Drawing review and drafting standards (v0.10, 14 Nov 2026). Sheet checks need no Civil 3D and work on any PDF set:
+  sheet_pdf_text (dump a set's text first), sheet_find_text (another site's name on this sheet: copy-paste leftovers),
+  sheet_pdf_tile and sheet_titleblocks (read small or outline text), sheet_profile_lines, sheet_fonts, sheet_merge_pdfs.
+  In Civil 3D: road_plot_all_layouts (every layout in one call, viewports regenerated), road_text_capitals,
+  road_text_font, road_style_text (label/band/view style text), road_rename_layouts, road_titleblock_audit
+  (one compact table per drawing, with flags), road_side_slopes,
+  road_survey_lines. Font, capitals and thresholds are the client's or engineer's settings: ask, never assume.
+- Reviewing a drawing set or producing working drawings (v0.10). The method is in the server: c3d_guide('index') lists
+  the topics; c3d_guide('review_checklist', '<section>') gives the checklist one section at a time; c3d_guide('lessons')
+  what earlier jobs taught; c3d_guide('tool_map') which tool does which job. task_preflight('drawing_review') or
+  ('working_drawings') gives the questions to ask once. The order that works: register (list against sheets, title
+  blocks) -> copy-paste leftovers -> survey and control -> drainage -> profiles and sections -> quantities (table = sum
+  of labels) -> details and bar schedules -> signals -> across the documents (report, bill, setting-out) -> revision
+  record. Do every arithmetic check with written working. Classify each finding: A drafting, B completeness for
+  construction, C design matter. Never decide a class C matter (size, level, grade, material, scope, a disagreement
+  between documents): report both values with their sheets and ask. The client's standards are settings to ask for,
+  and the client's accepted reference set outranks any general rule on presentation.
+- Lessons inbox (v0.10): the moment a tool fails, a step needs the screen, a workaround is used, or the person states a
+  standing rule, call c3d_note_lesson (one or two sentences: what happened and what to do next time). Do not wait
+  for the end of the task. c3d_lessons_inbox lists what is open; read it at the start of a job of the same kind.
 - c3d_status says 'restart_needed' when newer server code is installed than is running: tell the person, and
   don't work round the missing tools with scripts in the meantime.
 
@@ -485,6 +509,19 @@ async def c3d_knowledge() -> str:
     if local.exists():
         text += "\n\n" + local.read_text(encoding="utf-8")
     return text
+
+
+@mcp.tool()
+async def c3d_guide(topic: str = "index", section: str | None = None) -> dict:
+    """The server's guidance by topic and section, short enough to read when needed. topic: 'index' (what there is),
+    'review_checklist' (reviewing a drawing set and what a working drawing must carry), 'lessons' (what real jobs
+    taught), 'tool_map' (which tool for which job; what still needs the screen), 'knowledge' (the numbered knowledge
+    base). section: a number ('5', '14.3') or words from a heading ('drainage'). Read the checklist section for the
+    step you are on, not the whole file."""
+    try:
+        return await asyncio.to_thread(gde.guide, topic, section)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 @mcp.tool()
@@ -1629,6 +1666,181 @@ async def rd_visibility_splay(
     for k in ("splay_left", "splay_right", "polygon"):
         res[k] = _pts(res[k])
     return res
+
+
+# =============================================================================
+# DRAWING REVIEW AND DRAFTING STANDARDS (v0.10): sheet checks on PDFs, capitals, fonts, plot-all, side slopes
+# =============================================================================
+async def _off_thread(fn, *a, **kw):
+    try:
+        return await asyncio.to_thread(fn, *a, **kw)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def sheet_pdf_text(pdfs: list[str], out_dir: str) -> dict:
+    """Dump the text of drawing PDFs, page by page, to <out_dir>/txt/<key>.txt (keys S01, S02... in sets.json).
+    Do this first on any drawing set: searching text is far cheaper than looking at pages. No Civil 3D needed.
+    Pages with little text carry outline lettering: read those with sheet_pdf_tile / sheet_titleblocks."""
+    return await _off_thread(shc.dump_text, pdfs, out_dir)
+
+
+@mcp.tool()
+async def sheet_find_text(pdfs: list[str], terms: list[str], ignore_case: bool = True, limit: int = 300) -> dict:
+    """Where words occur in drawing PDFs: page, the text line, position and whether it is visible. Use it to hunt
+    copy-paste leftovers (search each sheet group for the names and numbers of the OTHER sites, pipe sizes, sheet
+    numbers), placeholders ('???', '%%', 'TBA') and cross-reference targets. Hidden hits mark a cloned sheet."""
+    return await _off_thread(shc.find_text, pdfs, terms, ignore_case, limit)
+
+
+@mcp.tool()
+async def sheet_pdf_tile(pdf: str, page: int = 1, dpi: int = 150, box: list[float] | None = None):
+    """Look at part of a PDF page: box=[x0, y0, x1, y1] as fractions of the page (e.g. [0.5, 0.86, 1, 1] for a
+    bottom-right title block). Whole sheet at 60-70 dpi (c3d_pdf_page); tiles at 150-250 dpi to read small text."""
+    out = await _off_thread(shc.tile_png, pdf, page, dpi, box)
+    return out if isinstance(out, dict) else [_Image(path=out), out]
+
+
+@mcp.tool()
+async def sheet_titleblocks(pdf: str, box: list[float] | None = None, per_sheet: int = 12,
+                            pages: list[int] | None = None):
+    """Contact sheets of the title-block strip of every page (or `pages`), 12 per image, each tagged with its page
+    number: the quick way to read drawing number, title, scale, names and revision for a whole set, and the only
+    way when the title block is drawn as outlines. box defaults to the full-width bottom strip [0, 0.86, 1, 1]. Returns the
+    first six images and every path: pass `pages` to see later ones."""
+    out = await _off_thread(shc.titleblock_sheets, pdf, box, per_sheet, 110, None, pages)
+    return out if isinstance(out, dict) else [_Image(path=p) for p in out[:6]] + ["; ".join(out)]
+
+
+@mcp.tool()
+async def sheet_profile_lines(pdfs: list[str], min_width_pt: float = 1.5, min_length_pt: float = 300.0) -> dict:
+    """Is the thick design-profile line on every plan-and-profile page? Lists pages where it is missing (they plot
+    without it unless each layout is regenerated from inside its viewport, and the fault returns on a replot).
+    Run after every plot of plan-and-profile sheets. Thresholds suit A1; lower them for A3."""
+    return await _off_thread(shc.profile_lines, pdfs, min_width_pt, min_length_pt)
+
+
+@mcp.tool()
+async def sheet_fonts(pdf: str, house_font: str | None = None, capitals: bool = False) -> dict:
+    """Fonts used by the visible text of a PDF. house_font (part of the font name, from the client's standard) lists
+    text in any other font; capitals=True lists lowercase words (unit symbols and addresses left out)."""
+    return await _off_thread(shc.fonts, pdf, house_font, capitals)
+
+
+@mcp.tool()
+async def sheet_merge_pdfs(files: list[str], out_pdf: str, title: str | None = None, author: str | None = None,
+                           expect_pages: int | None = None) -> dict:
+    """Merge sheet PDFs in the order given into one file (never over an existing one, never in a shared folder).
+    author is the firm's name; producer and creator are cleared. expect_pages: if the total differs the file is
+    named '(CHECK sheet count)' so it is not mistaken for the working set."""
+    return await _off_thread(shc.merge, files, out_pdf, title, author, expect_pages)
+
+
+@mcp.tool()
+async def road_plot_all_layouts(folder: str, layouts: list[str] | None = None, regen: bool = True,
+                                device: str | None = None) -> dict:
+    """Plot every layout of the active drawing (or `layouts`) to <folder>/<layout>.pdf in one call through the
+    Plot object, regenerating each layout's viewports first. Use this when road_plot_sheets plots only the first
+    layout of a list. Existing PDFs are skipped (plot to a fresh folder for a replot). 'left' = call again.
+    device: one plotter for every layout, e.g. 'DWG To PDF.pc3' when the layouts are set to a system printer."""
+    return await run(draft.plot_all_layouts, C, folder, layouts, regen, device)
+
+
+@mcp.tool()
+async def road_text_capitals(dry_run: bool = True) -> dict:
+    """All drawing text to capitals: text, mtext, leaders, dimension overrides, table cells, attributes, block
+    definitions (not xrefs). Unit symbols after a number stay lower case (50mm, 30 km/h); addresses are left.
+    Only when capitals are the client's house style. dry_run=True counts and samples. Working copies only."""
+    return await run(draft.text_capitals, C, dry_run)
+
+
+@mcp.tool()
+async def road_text_font(font: str, dry_run: bool = True) -> dict:
+    """Every text style and every inline font code of the active working drawing to one font (the client's).
+    dry_run=True lists what would change. Label styles keep their own inline codes: follow with road_style_text."""
+    return await run(draft.text_font, C, font, dry_run)
+
+
+@mcp.tool()
+async def road_style_text(action: str = "scan", only: list[str] | None = None, font: str | None = None) -> dict:
+    """Literal text inside Civil 3D label, band, view and table styles. action='scan': texts with lowercase
+    letters; 'list': every text; 'capitals': rewrite to capitals and switch field flags so names print in capitals
+    (font= also rewrites inline font codes). only=['ProfileLabelStyles', ...] limits the collections.
+    Plot one sheet and read it after 'capitals' before doing the rest. Working copies only for 'capitals'."""
+    return await run(draft.style_text, C, action, only, font)
+
+
+@mcp.tool()
+async def road_rename_layouts(old: str, new: str, dry_run: bool = True) -> dict:
+    """Replace a string in layout names and in the texts and attributes on those layouts, e.g. a wrong end
+    chainage in a sheet name and its sub-title. Take the new value from the alignment, not from another sheet."""
+    return await run(draft.rename_layouts, C, old, new, dry_run)
+
+
+@mcp.tool()
+async def road_titleblock_audit(scale_tags: list[str] | None = None, constant_tags: list[str] | None = None,
+                                compact: bool = True) -> dict:
+    """Title blocks of every sheet of the active drawing in one compact table, with flags: stated scale against the
+    viewport scale, sub-title chainage against the layout name, empty tags, values that vary between sheets (e.g.
+    'ENG ABC' / 'ENG. ABC', a different approver on one sheet), gaps in the sheet numbers, mixed paper or plot style.
+    Read-only. constant_tags: tags that must be identical on every sheet by the client's rule (e.g. CHECKED,
+    APPROVED, DATE, REV.). A sheet with no attribute block is reported: its title block is plain text."""
+    return await run(draft.titleblock_audit, C, scale_tags, constant_tags, "DWG_NUMBER", "SUB_TITLE", compact)
+
+
+@mcp.tool()
+async def road_side_slopes(alignment: str, out_csv: str | None = None, step: float = 5.0,
+                           threshold: float | None = None) -> dict:
+    """Fill (+) and cut (-) height at the road edge, per station and side, from the corridor's Hinge and Daylight
+    feature lines (active drawing = the corridor drawing; read-only; takes seconds). threshold (m, the engineer's
+    figure) also returns the fill and cut stretches at or above it, for a slope-protection or wall schedule."""
+    return await run(draft.side_slopes, C, alignment, out_csv, step, threshold)
+
+
+@mcp.tool()
+async def road_survey_lines(out_json: str, keys: list[str] | None = None, step: float = 1.0) -> dict:
+    """Survey line work on layers whose names contain any of `keys` (default WALL, FENC, BUILD, RETAIN), densified
+    every `step` m, to a JSON file {layer: [[x, y], ...]}. Read-only. Compare with the road edge by
+    civil_station_offset to find walls and fences too close to the works."""
+    return await run(draft.survey_lines, C, out_json, keys, step)
+
+
+# =============================================================================
+# LESSONS INBOX (v0.10): every session records gaps and lessons as they happen
+# =============================================================================
+@mcp.tool()
+async def c3d_note_lesson(text: str, kind: str = "lesson", area: str = "general", context: str = "") -> dict:
+    """Record one line in the private lessons inbox, at the moment it happens. kind: 'gap' (the server could not do
+    it and the screen or a script was used), 'bug' (a tool misbehaved), 'lesson' (how something works), 'rule' (a
+    standing instruction from the person or the client), 'idea' (a tool or check worth building). area: e.g.
+    'plotting', 'title blocks', 'vehicle tracking', 'drawing review'. context: drawing, tool and error, briefly.
+    Say what to do next time, not only what went wrong. The inbox is never published."""
+    try:
+        return await asyncio.to_thread(les.note, text, kind, area, context)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def c3d_lessons_inbox(open_only: bool = True, kind: str | None = None, area: str | None = None,
+                            limit: int = 40) -> dict:
+    """The lessons inbox: counts, and the entries (open ones by default; filter by kind or area). Read it at the
+    start of a job to see what earlier sessions hit, and before writing up lessons."""
+    try:
+        return await asyncio.to_thread(les.read, open_only, kind, area, limit)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@mcp.tool()
+async def c3d_lesson_done(match: str, outcome: str = "") -> dict:
+    """Tick the open inbox entries whose text contains `match`, once the lesson is folded into the lessons or
+    knowledge file, built as a tool, or dismissed. outcome says where it went. Only on the person's word."""
+    try:
+        return await asyncio.to_thread(les.done, match, outcome)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def main() -> None:
